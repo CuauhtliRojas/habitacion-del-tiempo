@@ -14,6 +14,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from src.checkpoints import load_checkpoint, save_checkpoint
+from src.experiment_manifest import build_run_manifest, write_run_manifest
 from src.dataset import (
     DualMaskSegmentationDataset,
     build_samples,
@@ -429,6 +430,15 @@ def main() -> None:
 
     dirs = make_experiment_dirs(config)
     write_config_snapshot(config, dirs["root"] / "config.resolved.json")
+    write_run_manifest(
+        path=dirs["root"] / "run_manifest.json",
+        manifest=build_run_manifest(
+            config=config,
+            command_line=sys.argv,
+            device=device,
+            dry_run=args.dry_run,
+        ),
+    )
 
     train_dataset = DualMaskSegmentationDataset(train_samples, image_size=int(config["image_size"]))
     val_dataset = DualMaskSegmentationDataset(val_samples, image_size=int(config["image_size"]))
