@@ -449,7 +449,7 @@ def main() -> None:
         pin_memory=device.type == "cuda",
     )
 
-    from Modelo_U_Net_dual_decoder import DualSegmentationModel
+    from src.model import DualSegmentationModel
 
     model = DualSegmentationModel().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=float(config["learning_rate"]))
