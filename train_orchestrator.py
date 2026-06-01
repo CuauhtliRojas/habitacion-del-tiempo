@@ -13,7 +13,6 @@ import yaml
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from Modelo_U_Net_dual_decoder import DualSegmentationModel
 from src.checkpoints import load_checkpoint, save_checkpoint
 from src.dataset import (
     DualMaskSegmentationDataset,
@@ -92,14 +91,25 @@ def apply_overrides(config: dict[str, Any], args: argparse.Namespace) -> dict[st
     return config
 
 
-def get_device(requested: str | None = None) -> torch.device:
+def get_device(requested: str | None = None, *, dry_run: bool = False) -> torch.device:
     if requested:
         return torch.device(requested)
+
+    if dry_run:
+        return torch.device("cpu")
 
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def get_gpu_info(device: torch.device) -> dict[str, Any]:
+def get_gpu_info(device: torch.device, *, dry_run: bool = False) -> dict[str, Any]:
+    if dry_run:
+        return {
+            "device": "dry-run/cpu",
+            "cuda_available": "no consultado en dry-run",
+            "gpu_name": "no consultado en dry-run",
+            "total_vram_gb": None,
+        }
+
     if device.type != "cuda":
         return {
             "device": str(device),
@@ -149,9 +159,9 @@ def print_preflight(config: dict[str, Any], gpu_info: dict[str, Any], train_coun
             "512x512 con batch_size mayor a 2 puede exceder VRAM en GPU de 6GB."
         )
 
-    if image_size >= 512 and gpu_info["total_vram_gb"] is not None and gpu_info["total_vram_gb"] <= 8:
+    if image_size >= 512:
         warnings.append(
-            "512x512 en GPU de 6-8GB debe probarse primero con pocas muestras."
+            "512x512 debe probarse primero con pocas muestras y batch reducido antes de un entrenamiento real."
         )
 
     if train_count > 10000 and epochs >= 20:
@@ -389,8 +399,8 @@ def main() -> None:
 
     torch.manual_seed(int(config["seed"]))
 
-    device = get_device(args.device)
-    gpu_info = get_gpu_info(device)
+    device = get_device(args.device, dry_run=args.dry_run)
+    gpu_info = get_gpu_info(device, dry_run=args.dry_run)
 
     all_train_samples = build_samples(
         dataset_root=config["dataset_root"],
@@ -438,6 +448,8 @@ def main() -> None:
         num_workers=int(config["num_workers"]),
         pin_memory=device.type == "cuda",
     )
+
+    from Modelo_U_Net_dual_decoder import DualSegmentationModel
 
     model = DualSegmentationModel().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=float(config["learning_rate"]))
