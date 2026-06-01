@@ -1,0 +1,22 @@
+﻿experiment_name: mixto_fs_li_256_base
+dataset_root: Dataset_U-Net_dual_decoder_fs_li
+output_root: outputs/experiments
+
+attacks:
+  - faceswap
+  - local_inpainting
+
+train_split: train
+test_split: test
+image_size: 256
+batch_size: 10
+epochs: 20
+learning_rate: 0.0005
+pos_weight: 65.0
+val_ratio: 0.1
+seed: 117
+num_workers: 0
+threshold: 0.5
+checkpoint_every: 1
+sample_every: 5
+mixed_precision: true

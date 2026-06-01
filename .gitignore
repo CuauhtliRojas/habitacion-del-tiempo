@@ -1,0 +1,36 @@
+﻿# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv/
+
+# Local dataset
+Dataset_U-Net_dual_decoder_fs_li/
+
+# Training artifacts
+*.pth
+*.pt
+*.ckpt
+checkpoints/
+outputs/
+predictions/
+overlays/
+logs/
+runs/
+
+# Local audits
+dataset_audit*.txt
+repo_training_code_audit.txt
+
+# Local dependency snapshots
+requirements-local-cu124.txt
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
