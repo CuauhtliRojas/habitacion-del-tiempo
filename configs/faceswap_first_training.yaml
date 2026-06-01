@@ -1,0 +1,21 @@
+﻿experiment_name: faceswap_first_training_512
+dataset_root: Dataset_U-Net_dual_decoder_fs_li
+output_root: outputs/experiments
+
+attacks:
+  - faceswap
+
+train_split: train
+test_split: test
+image_size: 512
+batch_size: 2
+epochs: 20
+learning_rate: 0.0005
+pos_weight: 65.0
+val_ratio: 0.1
+seed: 117
+num_workers: 0
+threshold: 0.5
+checkpoint_every: 1
+sample_every: 1
+mixed_precision: true

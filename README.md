@@ -376,3 +376,107 @@ Antes de iniciar entrenamiento real falta cerrar:
 5. Revisión de configuración 512.
 6. Validación de rutas en entorno local.
 7. Decisión explícita del primer experimento real.
+
+## Preparación para Colab
+
+El proyecto está preparado para moverse entre equipo local, otra PC y Colab siempre que se conserven:
+
+- el mismo repo o un repo compatible;
+- el mismo commit Git o uno compatible;
+- `config.resolved.json`;
+- `run_manifest.json`;
+- `metrics/metrics.csv`;
+- `checkpoints/last.pth`;
+- `checkpoints/best_val_loss.pth`, si existe;
+- `checkpoints/best_val_dice.pth`, si existe.
+
+### Flujo conceptual en Colab
+
+1. Montar Google Drive.
+2. Ubicar el repo dentro de Drive o copiarlo a `/content`.
+3. Instalar dependencias.
+4. Verificar dataset.
+5. Ejecutar `--dry-run`.
+6. Inspeccionar checkpoint si se va a reanudar.
+7. Reanudar con `--resume` solo cuando el entorno esté validado.
+
+### Archivos mínimos para reanudar en otra máquina
+
+```text
+outputs/experiments/<experiment_name>/
+├── config.resolved.json
+├── run_manifest.json
+├── metrics/
+│   └── metrics.csv
+└── checkpoints/
+    ├── last.pth
+    ├── best_val_loss.pth
+    └── best_val_dice.pth
+
+```
+
+### Reanudar entrenamiento
+
+```powershell
+uv run python .\train_orchestrator.py `
+  --config .\outputs\experiments\<experiment_name>\config.resolved.json `
+  --resume .\outputs\experiments\<experiment_name>\checkpoints\last.pth
+```
+
+### Inspeccionar checkpoint sin GPU
+
+```powershell
+uv run python .\scripts\inspect_checkpoint.py `  .\outputs\experiments\<experiment_name>\checkpoints\last.pth
+```
+
+### Regenerar gráficas sin entrenar
+
+```powershell
+uv run python .\scripts\recompute_experiment_artifacts.py`
+.\outputs\experiments\<experiment_name>
+```
+
+# Regla para Colab
+
+Antes de reanudar o iniciar entrenamiento en Colab, se debe ejecutar primero --dry-run. Si el dry-run no pasa, no se entrena.
+
+---
+
+## Validación final sin entrenar
+
+Ejecuta:
+
+```powershell
+uv run python -m py_compile `
+  .\train_orchestrator.py `
+  .\src\model.py `
+  .\src\dataset.py `
+  .\src\metrics.py `
+  .\src\checkpoints.py `
+  .\src\plots.py `
+  .\src\visualization.py `
+  .\src\experiment_manifest.py `
+  .\scripts\inspect_checkpoint.py `
+  .\scripts\recompute_experiment_artifacts.py `
+  .\scripts\write_resume_notes.py `
+  .\scripts\check_model_checkpoint_contract.py
+```
+
+Luego dry-run de la config final:
+
+```powershell
+uv run python .\train_orchestrator.py `
+  --config .\configs\faceswap_first_training.yaml `
+  --dry-run
+```
+
+Ese dry-run debe calcular solo faceswap/train, no mixto. Esperado aproximado:
+
+```
+Ataques: faceswap
+Image size: 512x512
+Batch size: 2
+Epochs: 20
+Train samples: ~21005
+Val samples: ~2333
+```
