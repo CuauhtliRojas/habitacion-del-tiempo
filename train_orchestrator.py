@@ -528,6 +528,12 @@ def main() -> None:
             "train_loss_authentic": train_metrics.get("loss_authentic"),
             "train_dice_fake": train_metrics.get("dice_fake"),
             "train_iou_fake": train_metrics.get("iou_fake"),
+            "train_precision_fake": train_metrics.get("precision_fake"),
+            "train_recall_fake": train_metrics.get("recall_fake"),
+            "train_f1_fake": train_metrics.get("f1_fake"),
+            "train_accuracy_fake": train_metrics.get("accuracy_fake"),
+            "train_dice_authentic": train_metrics.get("dice_authentic"),
+            "train_iou_authentic": train_metrics.get("iou_authentic"),
             "val_loss_total": val_metrics.get("loss_total"),
             "val_loss_fake": val_metrics.get("loss_fake"),
             "val_loss_authentic": val_metrics.get("loss_authentic"),
@@ -536,6 +542,9 @@ def main() -> None:
             "val_precision_fake": val_metrics.get("precision_fake"),
             "val_recall_fake": val_metrics.get("recall_fake"),
             "val_f1_fake": val_metrics.get("f1_fake"),
+            "val_accuracy_fake": val_metrics.get("accuracy_fake"),
+            "val_dice_authentic": val_metrics.get("dice_authentic"),
+            "val_iou_authentic": val_metrics.get("iou_authentic"),
         }
 
         for key, value in val_metrics.items():

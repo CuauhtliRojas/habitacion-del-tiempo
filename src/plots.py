@@ -79,6 +79,12 @@ def generate_training_plots(
             output_dir / "loss_fake_curve.png",
         ),
         (
+            ["train_loss_authentic", "val_loss_authentic"],
+            "Curva de perdida de mascara autentica",
+            "Loss authentic",
+            output_dir / "loss_authentic_curve.png",
+        ),
+        (
             ["train_dice_fake", "val_dice_fake"],
             "Curva Dice de mascara manipulada",
             "Dice",
@@ -91,10 +97,46 @@ def generate_training_plots(
             output_dir / "iou_fake_curve.png",
         ),
         (
+            ["train_precision_fake", "val_precision_fake"],
+            "Precision de mascara manipulada",
+            "Precision",
+            output_dir / "precision_fake_curve.png",
+        ),
+        (
+            ["train_recall_fake", "val_recall_fake"],
+            "Recall de mascara manipulada",
+            "Recall",
+            output_dir / "recall_fake_curve.png",
+        ),
+        (
+            ["train_f1_fake", "val_f1_fake"],
+            "F1 de mascara manipulada",
+            "F1",
+            output_dir / "f1_fake_curve.png",
+        ),
+        (
+            ["train_accuracy_fake", "val_accuracy_fake"],
+            "Accuracy de mascara manipulada",
+            "Accuracy",
+            output_dir / "accuracy_fake_curve.png",
+        ),
+        (
             ["val_precision_fake", "val_recall_fake", "val_f1_fake"],
             "Precision, recall y F1 en validacion",
             "Score",
             output_dir / "precision_recall_f1_curve.png",
+        ),
+        (
+            ["train_dice_authentic", "val_dice_authentic"],
+            "Curva Dice de mascara autentica",
+            "Dice authentic",
+            output_dir / "dice_authentic_curve.png",
+        ),
+        (
+            ["train_iou_authentic", "val_iou_authentic"],
+            "Curva IoU de mascara autentica",
+            "IoU authentic",
+            output_dir / "iou_authentic_curve.png",
         ),
     ]
 
