@@ -23,6 +23,8 @@ from src.dataset import (
     split_train_val,
 )
 from src.metrics import dual_segmentation_loss, segmentation_metric_row
+from src.plots import analyze_fit_status, generate_training_plots
+from src.visualization import save_epoch_samples
 
 
 def parse_bool(value: str | bool | None) -> bool | None:
@@ -521,6 +523,28 @@ def main() -> None:
         metrics_history.append(row)
         append_metrics_csv(metrics_csv, row)
 
+        generated_plots = generate_training_plots(
+            metrics_csv=metrics_csv,
+            output_dir=dirs["plots"],
+        )
+
+        fit_report = analyze_fit_status(
+            metrics_csv=metrics_csv,
+            output_path=dirs["root"] / "fit_report.txt",
+        )
+
+        sample_every = int(config.get("sample_every", 0) or 0)
+        if sample_every > 0 and epoch % sample_every == 0:
+            save_epoch_samples(
+                model=model,
+                loader=val_loader,
+                device=device,
+                output_dir=dirs["samples"],
+                epoch=epoch,
+                threshold=float(config["threshold"]),
+                max_samples=8,
+            )
+
         print(
             f"Epoch {epoch}: "
             f"train_loss={row['train_loss_total']:.4f} "
@@ -590,6 +614,9 @@ def main() -> None:
     print("\nEntrenamiento finalizado.")
     print(f"Metricas: {metrics_csv}")
     print(f"Checkpoints: {dirs['checkpoints']}")
+    print(f"Graficas: {dirs['plots']}")
+    print(f"Muestras visuales: {dirs['samples']}")
+    print(f"Reporte de ajuste: {dirs['root'] / 'fit_report.txt'}")
 
 
 if __name__ == "__main__":
