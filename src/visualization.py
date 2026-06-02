@@ -111,7 +111,9 @@ def save_epoch_samples(
         authentic_masks = batch["authentic_mask"].to(device)
         stems = batch["stem"]
 
-        pred_fake, pred_authentic = model(images)
+        pred_fake_logits, pred_authentic_logits = model(images)
+        pred_fake = torch.sigmoid(pred_fake_logits.float())
+        pred_authentic = torch.sigmoid(pred_authentic_logits.float())
 
         batch_size = images.shape[0]
 

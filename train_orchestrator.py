@@ -257,19 +257,59 @@ def run_epoch(
     metric_rows: list[dict[str, float]] = []
     per_attack_rows: dict[str, list[dict[str, float]]] = {}
 
+    skipped_nonfinite_batches = 0
+    optimizer_steps = 0
+
+    accumulation_steps = int(config.get("gradient_accumulation_steps", 1) or 1)
+    if accumulation_steps < 1:
+        accumulation_steps = 1
+
+    if not is_train:
+        accumulation_steps = 1
+
+    max_grad_norm = float(config.get("max_grad_norm", 0.0) or 0.0)
+    lambda_bce = float(config.get("lambda_bce", 1.0))
+    lambda_dice = float(config.get("lambda_dice", 1.0))
+
+    use_amp = bool(config.get("mixed_precision", False)) and device.type == "cuda"
+
+    if is_train:
+        assert optimizer is not None
+        optimizer.zero_grad(set_to_none=True)
+
+    accumulated_batches = 0
+
+    def optimizer_step() -> None:
+        nonlocal optimizer_steps
+
+        if not is_train:
+            return
+
+        assert optimizer is not None
+
+        if scaler is not None and use_amp:
+            if max_grad_norm > 0.0:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            if max_grad_norm > 0.0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+
+            optimizer.step()
+
+        optimizer.zero_grad(set_to_none=True)
+        optimizer_steps += 1
+
     progress = tqdm(loader, desc=phase, unit="batch")
 
-    for batch in progress:
+    for batch_idx, batch in enumerate(progress):
         images = batch["image"].to(device)
         fake_masks = batch["fake_mask"].to(device)
         authentic_masks = batch["authentic_mask"].to(device)
         attacks = batch["attack"]
-
-        if is_train:
-            assert optimizer is not None
-            optimizer.zero_grad(set_to_none=True)
-
-        use_amp = bool(config.get("mixed_precision", False)) and device.type == "cuda"
 
         with torch.set_grad_enabled(is_train):
             with torch.cuda.amp.autocast(enabled=use_amp):
@@ -281,18 +321,39 @@ def run_epoch(
                     pred_authentic=pred_authentic,
                     target_authentic=authentic_masks,
                     pos_weight=float(config["pos_weight"]),
+                    lambda_bce=lambda_bce,
+                    lambda_dice=lambda_dice,
                 )
 
-            if is_train:
-                if scaler is not None and use_amp:
-                    scaler.scale(loss).backward()
-                    scaler.step(optimizer)
-                    scaler.update()
-                else:
-                    loss.backward()
-                    optimizer.step()
+            if not bool(torch.isfinite(loss.detach()).all().item()):
+                skipped_nonfinite_batches += 1
+                progress.set_postfix(loss="nonfinite", skipped=skipped_nonfinite_batches)
+                continue
 
-        loss_rows.append(loss_parts)
+            if is_train:
+                loss_for_backward = loss / accumulation_steps
+
+                if scaler is not None and use_amp:
+                    scaler.scale(loss_for_backward).backward()
+                else:
+                    loss_for_backward.backward()
+
+                accumulated_batches += 1
+
+                should_step = (
+                    accumulated_batches % accumulation_steps == 0
+                    or batch_idx == len(loader) - 1
+                )
+
+                if should_step:
+                    optimizer_step()
+
+        if all(math.isfinite(float(value)) for value in loss_parts.values()):
+            loss_rows.append(loss_parts)
+        else:
+            skipped_nonfinite_batches += 1
+            progress.set_postfix(loss="nonfinite", skipped=skipped_nonfinite_batches)
+            continue
 
         metrics = segmentation_metric_row(
             pred_fake=pred_fake.detach(),
@@ -301,22 +362,37 @@ def run_epoch(
             target_authentic=authentic_masks.detach(),
             threshold=float(config["threshold"]),
         )
-        metric_rows.append(metrics)
 
-        for attack in set(attacks):
-            attack_indices = [i for i, value in enumerate(attacks) if value == attack]
-            idx_tensor = torch.tensor(attack_indices, dtype=torch.long, device=device)
+        if all(math.isfinite(float(value)) for value in metrics.values()):
+            metric_rows.append(metrics)
 
-            attack_metrics = segmentation_metric_row(
-                pred_fake=pred_fake.detach().index_select(0, idx_tensor),
-                target_fake=fake_masks.detach().index_select(0, idx_tensor),
-                pred_authentic=pred_authentic.detach().index_select(0, idx_tensor),
-                target_authentic=authentic_masks.detach().index_select(0, idx_tensor),
-                threshold=float(config["threshold"]),
-            )
-            per_attack_rows.setdefault(attack, []).append(attack_metrics)
+            for attack in set(attacks):
+                attack_indices = [i for i, value in enumerate(attacks) if value == attack]
+                idx_tensor = torch.tensor(attack_indices, dtype=torch.long, device=device)
 
-        progress.set_postfix(loss=f"{loss_parts['loss_total']:.4f}")
+                attack_metrics = segmentation_metric_row(
+                    pred_fake=pred_fake.detach().index_select(0, idx_tensor),
+                    target_fake=fake_masks.detach().index_select(0, idx_tensor),
+                    pred_authentic=pred_authentic.detach().index_select(0, idx_tensor),
+                    target_authentic=authentic_masks.detach().index_select(0, idx_tensor),
+                    threshold=float(config["threshold"]),
+                )
+
+                if all(math.isfinite(float(value)) for value in attack_metrics.values()):
+                    per_attack_rows.setdefault(attack, []).append(attack_metrics)
+
+        progress.set_postfix(
+            loss=f"{loss_parts['loss_total']:.4f}",
+            skipped=skipped_nonfinite_batches,
+            steps=optimizer_steps,
+        )
+
+
+    if not loss_rows:
+        raise RuntimeError(
+            f"{phase}: no hubo batches con loss finita. "
+            "No se puede calcular promedio de epoch sin contaminar metrics.csv."
+        )
 
     avg_loss = average_dicts(loss_rows)
     avg_metrics = average_dicts(metric_rows)
@@ -324,6 +400,12 @@ def run_epoch(
     result: dict[str, Any] = {
         **avg_loss,
         **avg_metrics,
+        "skipped_nonfinite_batches": skipped_nonfinite_batches,
+        "optimizer_steps": optimizer_steps,
+        "gradient_accumulation_steps": accumulation_steps,
+        "max_grad_norm": max_grad_norm,
+        "lambda_bce": lambda_bce,
+        "lambda_dice": lambda_dice,
     }
 
     for attack, rows in per_attack_rows.items():
@@ -332,7 +414,6 @@ def run_epoch(
             result[f"{attack}_{key}"] = value
 
     return result
-
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -545,6 +626,21 @@ def main() -> None:
             "val_accuracy_fake": val_metrics.get("accuracy_fake"),
             "val_dice_authentic": val_metrics.get("dice_authentic"),
             "val_iou_authentic": val_metrics.get("iou_authentic"),
+            "train_loss_fake_bce": train_metrics.get("loss_fake_bce"),
+            "train_loss_fake_dice": train_metrics.get("loss_fake_dice"),
+            "train_loss_authentic_bce": train_metrics.get("loss_authentic_bce"),
+            "train_loss_authentic_dice": train_metrics.get("loss_authentic_dice"),
+            "train_skipped_nonfinite_batches": train_metrics.get("skipped_nonfinite_batches"),
+            "train_optimizer_steps": train_metrics.get("optimizer_steps"),
+            "train_gradient_accumulation_steps": train_metrics.get("gradient_accumulation_steps"),
+            "train_max_grad_norm": train_metrics.get("max_grad_norm"),
+            "train_lambda_bce": train_metrics.get("lambda_bce"),
+            "train_lambda_dice": train_metrics.get("lambda_dice"),
+            "val_loss_fake_bce": val_metrics.get("loss_fake_bce"),
+            "val_loss_fake_dice": val_metrics.get("loss_fake_dice"),
+            "val_loss_authentic_bce": val_metrics.get("loss_authentic_bce"),
+            "val_loss_authentic_dice": val_metrics.get("loss_authentic_dice"),
+            "val_skipped_nonfinite_batches": val_metrics.get("skipped_nonfinite_batches"),
         }
 
         for key, value in val_metrics.items():

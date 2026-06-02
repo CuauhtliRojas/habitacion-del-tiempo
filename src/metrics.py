@@ -1,9 +1,14 @@
 ﻿from __future__ import annotations
 
 import torch
+import torch.nn.functional as F
 
 
 EPS = 1e-7
+
+
+def logits_to_probabilities(logits: torch.Tensor) -> torch.Tensor:
+    return torch.sigmoid(logits.float())
 
 
 def threshold_mask(pred: torch.Tensor, threshold: float = 0.5) -> torch.Tensor:
@@ -74,34 +79,43 @@ def segmentation_metric_row(
     target_authentic: torch.Tensor,
     threshold: float,
 ) -> dict[str, float]:
+    pred_fake_prob = logits_to_probabilities(pred_fake)
+    pred_authentic_prob = logits_to_probabilities(pred_authentic)
+
     return {
-        "dice_fake": dice_score(pred_fake, target_fake, threshold),
-        "iou_fake": iou_score(pred_fake, target_fake, threshold),
-        "precision_fake": precision_score_mask(pred_fake, target_fake, threshold),
-        "recall_fake": recall_score_mask(pred_fake, target_fake, threshold),
-        "f1_fake": f1_score_mask(pred_fake, target_fake, threshold),
-        "accuracy_fake": accuracy_score_mask(pred_fake, target_fake, threshold),
-        "dice_authentic": dice_score(pred_authentic, target_authentic, threshold),
-        "iou_authentic": iou_score(pred_authentic, target_authentic, threshold),
+        "dice_fake": dice_score(pred_fake_prob, target_fake, threshold),
+        "iou_fake": iou_score(pred_fake_prob, target_fake, threshold),
+        "precision_fake": precision_score_mask(pred_fake_prob, target_fake, threshold),
+        "recall_fake": recall_score_mask(pred_fake_prob, target_fake, threshold),
+        "f1_fake": f1_score_mask(pred_fake_prob, target_fake, threshold),
+        "accuracy_fake": accuracy_score_mask(pred_fake_prob, target_fake, threshold),
+        "dice_authentic": dice_score(pred_authentic_prob, target_authentic, threshold),
+        "iou_authentic": iou_score(pred_authentic_prob, target_authentic, threshold),
     }
 
 
-def weighted_bce_from_probabilities(
-    pred: torch.Tensor,
+def weighted_bce_from_logits(
+    logits: torch.Tensor,
     target: torch.Tensor,
     pos_weight: float = 1.0,
 ) -> torch.Tensor:
-    pred = pred.clamp(min=EPS, max=1.0 - EPS)
+    logits = logits.float()
     target = target.float()
+    pos_weight_tensor = torch.as_tensor(
+        pos_weight,
+        dtype=logits.dtype,
+        device=logits.device,
+    )
 
-    positive_loss = -pos_weight * target * torch.log(pred)
-    negative_loss = -(1.0 - target) * torch.log(1.0 - pred)
+    return F.binary_cross_entropy_with_logits(
+        logits,
+        target,
+        pos_weight=pos_weight_tensor,
+    )
 
-    return (positive_loss + negative_loss).mean()
 
-
-def soft_dice_loss(pred: torch.Tensor, target: torch.Tensor, smooth: float = 1.0) -> torch.Tensor:
-    pred = pred.float()
+def soft_dice_loss(logits: torch.Tensor, target: torch.Tensor, smooth: float = 1.0) -> torch.Tensor:
+    pred = logits_to_probabilities(logits)
     target = target.float()
 
     intersection = (pred * target).sum(dim=(1, 2, 3))
@@ -112,8 +126,8 @@ def soft_dice_loss(pred: torch.Tensor, target: torch.Tensor, smooth: float = 1.0
     return 1.0 - dice.mean()
 
 
-def soft_iou_loss(pred: torch.Tensor, target: torch.Tensor, smooth: float = 1e-6) -> torch.Tensor:
-    pred = pred.float()
+def soft_iou_loss(logits: torch.Tensor, target: torch.Tensor, smooth: float = 1e-6) -> torch.Tensor:
+    pred = logits_to_probabilities(logits)
     target = target.float()
 
     intersection = (pred * target).sum(dim=(1, 2, 3))
@@ -131,23 +145,33 @@ def dual_segmentation_loss(
     pred_authentic: torch.Tensor,
     target_authentic: torch.Tensor,
     pos_weight: float,
+    lambda_bce: float = 1.0,
+    lambda_dice: float = 1.0,
 ) -> tuple[torch.Tensor, dict[str, float]]:
-    loss_fake = (
-        weighted_bce_from_probabilities(pred_fake, target_fake, pos_weight=pos_weight)
-        + soft_dice_loss(pred_fake, target_fake)
-        + soft_iou_loss(pred_fake, target_fake)
+    loss_fake_bce = weighted_bce_from_logits(
+        pred_fake,
+        target_fake,
+        pos_weight=pos_weight,
     )
+    loss_fake_dice = soft_dice_loss(pred_fake, target_fake)
+    loss_fake = (lambda_bce * loss_fake_bce) + (lambda_dice * loss_fake_dice)
 
-    loss_authentic = (
-        weighted_bce_from_probabilities(pred_authentic, target_authentic, pos_weight=pos_weight)
-        + soft_dice_loss(pred_authentic, target_authentic)
-        + soft_iou_loss(pred_authentic, target_authentic)
+    loss_authentic_bce = weighted_bce_from_logits(
+        pred_authentic,
+        target_authentic,
+        pos_weight=pos_weight,
     )
+    loss_authentic_dice = soft_dice_loss(pred_authentic, target_authentic)
+    loss_authentic = (lambda_bce * loss_authentic_bce) + (lambda_dice * loss_authentic_dice)
 
     total_loss = loss_fake + loss_authentic
 
     return total_loss, {
         "loss_total": float(total_loss.detach().cpu()),
         "loss_fake": float(loss_fake.detach().cpu()),
+        "loss_fake_bce": float(loss_fake_bce.detach().cpu()),
+        "loss_fake_dice": float(loss_fake_dice.detach().cpu()),
         "loss_authentic": float(loss_authentic.detach().cpu()),
+        "loss_authentic_bce": float(loss_authentic_bce.detach().cpu()),
+        "loss_authentic_dice": float(loss_authentic_dice.detach().cpu()),
     }

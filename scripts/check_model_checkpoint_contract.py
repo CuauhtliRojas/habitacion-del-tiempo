@@ -32,42 +32,44 @@ def main() -> None:
     authentic_masks = torch.randint(0, 2, (batch_size, 1, image_size, image_size), device=device).float()
 
     with torch.no_grad():
-        pred_fake, pred_authentic = model(images)
+        pred_fake_logits, pred_authentic_logits = model(images)
+        pred_fake_prob = torch.sigmoid(pred_fake_logits.float())
+        pred_authentic_prob = torch.sigmoid(pred_authentic_logits.float())
 
-    print("pred_fake shape:", tuple(pred_fake.shape))
-    print("pred_authentic shape:", tuple(pred_authentic.shape))
-    print("pred_fake min/max:", float(pred_fake.min()), float(pred_fake.max()))
-    print("pred_authentic min/max:", float(pred_authentic.min()), float(pred_authentic.max()))
+    print("pred_fake_logits shape:", tuple(pred_fake_logits.shape))
+    print("pred_authentic_logits shape:", tuple(pred_authentic_logits.shape))
+    print("pred_fake_logits min/max:", float(pred_fake_logits.min()), float(pred_fake_logits.max()))
+    print("pred_authentic_logits min/max:", float(pred_authentic_logits.min()), float(pred_authentic_logits.max()))
+    print("pred_fake_prob min/max:", float(pred_fake_prob.min()), float(pred_fake_prob.max()))
+    print("pred_authentic_prob min/max:", float(pred_authentic_prob.min()), float(pred_authentic_prob.max()))
 
-    if pred_fake.shape != fake_masks.shape:
-        raise RuntimeError(f"Shape incompatible pred_fake={pred_fake.shape}, target={fake_masks.shape}")
+    if pred_fake_logits.shape != fake_masks.shape:
+        raise RuntimeError(f"Shape incompatible pred_fake_logits={pred_fake_logits.shape}, target={fake_masks.shape}")
 
-    if pred_authentic.shape != authentic_masks.shape:
+    if pred_authentic_logits.shape != authentic_masks.shape:
         raise RuntimeError(
-            f"Shape incompatible pred_authentic={pred_authentic.shape}, target={authentic_masks.shape}"
+            f"Shape incompatible pred_authentic_logits={pred_authentic_logits.shape}, target={authentic_masks.shape}"
         )
 
-    if float(pred_fake.min()) < 0.0 or float(pred_fake.max()) > 1.0:
-        raise RuntimeError("pred_fake no esta en rango [0, 1].")
+    if float(pred_fake_prob.min()) < 0.0 or float(pred_fake_prob.max()) > 1.0:
+        raise RuntimeError("pred_fake_prob no esta en rango [0, 1].")
 
-    if float(pred_authentic.min()) < 0.0 or float(pred_authentic.max()) > 1.0:
-        raise RuntimeError("pred_authentic no esta en rango [0, 1].")
+    if float(pred_authentic_prob.min()) < 0.0 or float(pred_authentic_prob.max()) > 1.0:
+        raise RuntimeError("pred_authentic_prob no esta en rango [0, 1].")
 
     loss, loss_parts = dual_segmentation_loss(
-        pred_fake=pred_fake,
+        pred_fake=pred_fake_logits,
         target_fake=fake_masks,
-        pred_authentic=pred_authentic,
+        pred_authentic=pred_authentic_logits,
         target_authentic=authentic_masks,
-        pos_weight=65.0,
+        pos_weight=2.1,
     )
-
-    print("loss_total:", float(loss))
     print("loss_parts:", loss_parts)
 
     metric_row = segmentation_metric_row(
-        pred_fake=pred_fake,
+        pred_fake=pred_fake_logits,
         target_fake=fake_masks,
-        pred_authentic=pred_authentic,
+        pred_authentic=pred_authentic_logits,
         target_authentic=authentic_masks,
         threshold=0.5,
     )

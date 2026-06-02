@@ -71,7 +71,7 @@ class DualSegmentationModel(nn.Module):
         up2 = decoders[1](up1, conv3)
         up3 = decoders[2](up2, conv2)
         up4 = decoders[3](up3, conv1)
-        return torch.sigmoid(final(up4))
+        return final(up4)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         c1 = self.encoder1(x)
