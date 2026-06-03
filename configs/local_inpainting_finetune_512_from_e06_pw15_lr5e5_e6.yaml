@@ -1,0 +1,35 @@
+﻿experiment_name: local_inpainting_finetune_512_from_e06_pw15_lr5e5_e6
+dataset_root: Dataset_U-Net_dual_decoder_fs_li
+output_root: outputs/experiments
+
+attacks:
+  - local_inpainting
+
+train_split: train
+test_split: test
+image_size: 512
+
+batch_size: 4
+gradient_accumulation_steps: 2
+
+epochs: 6
+learning_rate: 0.00005
+
+# Fine-tuning para corregir sobrepintado:
+# el entrenamiento base con pos_weight 33.47 produjo recall alto y precision baja.
+pos_weight: 15.0
+
+lambda_bce: 1.0
+lambda_dice: 2.0
+max_grad_norm: 1.0
+
+val_ratio: 0.1
+seed: 117
+num_workers: 0
+threshold: 0.5
+checkpoint_every: 1
+sample_every: 1
+mixed_precision: true
+
+# Cargar pesos aprendidos, pero reiniciar optimizador.
+weights: outputs/experiments/local_inpainting_training_512_pw33_lr3e4_stable_e15_bs4/checkpoints/epoch_006.pth

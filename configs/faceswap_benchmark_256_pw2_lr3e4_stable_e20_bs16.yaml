@@ -1,0 +1,39 @@
+﻿experiment_name: faceswap_benchmark_256_pw2_lr3e4_stable_e20_bs16
+dataset_root: Dataset_U-Net_dual_decoder_fs_li
+output_root: outputs/experiments
+
+attacks:
+  - faceswap
+
+train_split: train
+test_split: test
+image_size: 256
+
+# Benchmark/ablacion a 256x256.
+# En 512x512 faceswap uso ~2.5GB; 256x256 reduce pixeles por imagen 4x.
+# batch_size 16 es agresivo pero razonablemente seguro para RTX 4050 6GB.
+batch_size: 16
+
+# Effective batch size = 16 * 1 = 16.
+# Se prioriza velocidad nocturna y estabilidad por batch fisico grande.
+gradient_accumulation _steps: 1
+
+epochs: 20
+learning_rate: 0.0003
+
+# Calculado previamente para faceswap:
+# positive_fraction aprox = 0.325
+# pos_weight aprox = negative_pixels / positive_pixels = 2.07
+pos_weight: 2.1
+
+lambda_bce: 1.0
+lambda_dice: 2.0
+max_grad_norm: 1.0
+
+val_ratio: 0.1
+seed: 117
+num_workers: 0
+threshold: 0.5
+checkpoint_every: 1
+sample_every: 1
+mixed_precision: true

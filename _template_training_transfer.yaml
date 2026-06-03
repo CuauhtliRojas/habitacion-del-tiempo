@@ -1,0 +1,91 @@
+﻿# ============================================================
+# PLANTILLA DE CONFIGURACION DE ENTRENAMIENTO
+# U-Net Dual-Decoder para segmentacion de manipulaciones faciales
+# ============================================================
+#
+# Instrucciones:
+# - Copia este archivo y renombralo segun el experimento.
+# - No entrenes directamente con esta plantilla.
+# - Ajusta attack, image_size, batch_size, epochs y pos_weight.
+# - Usa pos_weight calculado desde las mascaras reales del dataset.
+# - Para fine-tuning usa "weights".
+# - Para reanudar exactamente un experimento interrumpido usa "resume".
+#
+# Ejemplo de nombre:
+# configs/faceswap_training_512_pw2_lr3e4_stable_e15.yaml
+# configs/local_inpainting_finetune_512_from_e06_pw15_lr5e5_e6.yaml
+
+experiment_name: CAMBIAR_NOMBRE_EXPERIMENTO
+dataset_root: Dataset_U-Net_dual_decoder_fs_li
+output_root: outputs/experiments
+
+# Ataque a entrenar.
+# Valores usados hasta ahora:
+# - faceswap
+# - local_inpainting
+attacks:
+  - CAMBIAR_ATAQUE
+
+train_split: train
+test_split: test
+
+# Resolucion de entrada.
+# 512 = entrenamiento de mayor detalle.
+# 256 = benchmark/ablacion comparable con modelos de menor resolucion.
+image_size: 512
+
+# Batch fisico en GPU.
+# RTX 4050 6GB:
+# - 512x512 seguro: batch_size 2 o 4 segun ataque.
+# - 256x256 faceswap probado: batch_size 16.
+batch_size: 2
+
+# Batch efectivo = batch_size * gradient_accumulation_steps.
+# Usar acumulacion si la VRAM impide batch fisico grande.
+gradient_accumulation_steps: 4
+
+# Numero de epocas.
+# Usar 15 como primer entrenamiento serio.
+# Usar 20 para benchmark/ablacion si se guardan checkpoints por epoca.
+epochs: 15
+
+# Learning rate.
+# Desde cero: 0.0003.
+# Fine-tuning: 0.00005 o 0.0001.
+learning_rate: 0.0003
+
+# Peso de clase positiva para BCEWithLogits.
+# Debe calcularse como:
+# pos_weight = pixeles_negativos / pixeles_positivos
+#
+# Valores validados:
+# - faceswap: 2.1
+# - local_inpainting train/mascara_fake: 33.4754694047
+# - local_inpainting fine-tuning correctivo: 15.0
+pos_weight: CAMBIAR_POS_WEIGHT
+
+# Pesos de la funcion de perdida:
+# loss = lambda_bce * BCEWithLogits + lambda_dice * Dice
+lambda_bce: 1.0
+lambda_dice: 2.0
+
+# Gradient clipping para evitar gradientes explosivos.
+# Con AMP se aplica despues de scaler.unscale_(optimizer).
+max_grad_norm: 1.0
+
+val_ratio: 0.1
+seed: 117
+num_workers: 0
+threshold: 0.5
+checkpoint_every: 1
+sample_every: 1
+mixed_precision: true
+
+# Fine-tuning:
+# Usar weights para cargar solo pesos del modelo y reiniciar optimizador.
+# weights: outputs/experiments/EXPERIMENTO_BASE/checkpoints/epoch_XXX.pth
+
+# Resume:
+# Usar resume para continuar exactamente el mismo entrenamiento,
+# cargando modelo + optimizador + scaler + epoch.
+# resume: outputs/experiments/EXPERIMENTO/checkpoints/last.pth
