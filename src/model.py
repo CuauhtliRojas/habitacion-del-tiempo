@@ -3,11 +3,30 @@
 import torch
 import torch.nn as nn
 
+"""
+Este codigo conserva la idea principal del  codigo Deepshield/model.py:
+una red tipo U-Net con dos salidas, una para la región manipulada y 
+otra para la región auténtica. La diferencia importante es que aquí el modelo 
+solo define la arquitectura.
+No carga datos 
+No calcula pérdidas 
+No decide rutas de entrenamiento.
+
+Esto hace que el codigo sea más fácil de repetir y comparar.
+
+"""
+
+
 
 class ResidualBlock(nn.Module):
+    """
+    Bloque residual: la red aprende una transformación nueva, pero también
+    conserva un "atajo" de la entrada. En palabras simples, esto ayuda a que
+    la información no se pierda tan rápido cuando la red se vuelve más profunda.
+
+    """
     def __init__(self, in_channels: int, out_channels: int) -> None:
         super().__init__()
-
         self.shortcut = nn.Conv2d(in_channels, out_channels, 1)
         self.conv1 = nn.Conv2d(in_channels, out_channels, 3, padding=1)
         self.conv2 = nn.Conv2d(out_channels, out_channels, 3, padding=1)
@@ -23,9 +42,13 @@ class ResidualBlock(nn.Module):
 
 
 class UpConv(nn.Module):
+    """
+    Bloque de subida: aumenta la resolución y concatena información del encoder.
+    esta es la idea clásica de U-Net: comprimir para entender el contexto y luego
+    reconstruir la máscara usando conexiones de salto.
+    """
     def __init__(self, in_channels: int, out_channels: int) -> None:
         super().__init__()
-
         self.up = nn.ConvTranspose2d(in_channels, out_channels, 2, stride=2)
 
     def forward(self, x: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
@@ -34,6 +57,11 @@ class UpConv(nn.Module):
 
 
 class DualSegmentationModel(nn.Module):
+    """
+    Dual-decoder: se comparte un mismo encoder para entender la imagen, pero se
+    usan dos decodificadores separados. Una cabeza aprende la máscara fake y la
+    otra aprende la máscara auténtica/original.
+    """
     def __init__(self, img_channels: int = 3, output_channels: int = 1) -> None:
         super().__init__()
 
@@ -71,15 +99,27 @@ class DualSegmentationModel(nn.Module):
         up2 = decoders[1](up1, conv3)
         up3 = decoders[2](up2, conv2)
         up4 = decoders[3](up3, conv1)
+        """"
+        Importante: aquí NO aplicamos sigmoid.
+        En el codigo Deepshield/model.py  el modelo devolvía probabilidades con sigmoide, pero
+        el entrenamiento usaba BCEWithLogitsLoss, que espera logits crudos y
+        aplica la sigmoid internamente de forma más estable.
+        Explicacion->Pruebas/BCEWithLogitsLoss.py
+        """
         return final(up4)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Encoder: reduce la resolución progresivamente para capturar contexto.
+        """
         c1 = self.encoder1(x)
         c2 = self.encoder2(self.pool(c1))
         c3 = self.encoder3(self.pool(c2))
         c4 = self.encoder4(self.pool(c3))
         c5 = self.encoder5(self.pool(c4))
-
+        """
+        Decoder fake: predice la región manipulada.
+        """
         pred_fake = self.decoder_branch(
             c1,
             c2,
@@ -95,6 +135,9 @@ class DualSegmentationModel(nn.Module):
             self.final_instr,
         )
 
+        """
+        Decoder auténtica: predice la región original.
+        """
         pred_authentic = self.decoder_branch(
             c1,
             c2,
@@ -109,5 +152,11 @@ class DualSegmentationModel(nn.Module):
             ],
             self.final_org,
         )
-
+        """
+        Se devuelven logits(los valores de salida de la última capa de una red neuronal
+        que aún no se han normalizado a probabilidades).
+        
+        Las métricas y la visualización son quienes
+        convierten estos logits a probabilidades usando sigmoid.
+        """
         return pred_fake, pred_authentic

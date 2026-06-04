@@ -1,39 +1,60 @@
-﻿# Cámara de entrenamiento 100G
+﻿# 🐉 Habitación del Tiempo (Cámara de Entrenamiento 100G)
 
-Repositorio local para preparar, validar y ejecutar experimentos de segmentación semántica binaria sobre manipulaciones faciales deepfake mediante un modelo U-Net dual-decoder.
+Guía operativa para preparar, validar, entrenar, reanudar y evaluar experimentos de segmentación semántica binaria sobre manipulaciones faciales deepfake.
 
-El objetivo del orquestador es centralizar la configuración experimental, la validación previa, el control de épocas, checkpoints, métricas, gráficas, muestras visuales, reporte de ajuste y reanudación de entrenamiento. El proyecto está pensado para funcionar tanto en equipo local como en Colab, siempre que se conserve la misma estructura de dataset y se ajusten las rutas cuando sea necesario.
+Este repositorio entrena una arquitectura **U-Net Dual-Decoder** para localizar regiones manipuladas en imágenes faciales. Actualmente se trabaja con dos tipos de ataque:
 
-## Estado actual
+- `faceswap`
+- `local_inpainting`
 
-El proyecto ya cuenta con:
+El objetivo principal es predecir una **máscara fake** que indique la región manipulada. La arquitectura también predice una **máscara auténtica**, pero el análisis principal del proyecto se centra en la localización de la región alterada.
 
-- Entorno `uv` configurado con Python 3.12.
-- PyTorch con CUDA instalado localmente.
-- Dataset local ignorado por Git.
-- Modelo base `DualSegmentationModel`.
-- Orquestador base `train_orchestrator.py`.
-- Validación previa mediante `--dry-run`.
-- Métricas base de segmentación.
-- Checkpoints completos.
-- Generación futura de gráficas, muestras visuales y reporte de ajuste.
-- Configuraciones YAML separadas para preflight y experimentos base.
+---
 
-## Regla operativa actual
+## 1. Requisitos locales
 
-No se ejecuta entrenamiento real hasta cerrar:
+Entorno esperado:
 
-1. configuración final;
-2. documentación local y Colab;
-3. validaciones `--dry-run`;
-4. revisión del flujo de checkpoints y resume;
-5. autorización explícita para iniciar entrenamiento.
+```text
+Python 3.12
+uv
+PyTorch con CUDA
+GPU NVIDIA con CUDA disponible
+Dataset local en Dataset_U-Net_dual_decoder_fs_li/
+```
 
-Los comandos de entrenamiento real no deben ejecutarse todavía. Por ahora solo se permite validar estructura, compilar scripts, revisar configuraciones, ejecutar conteos y correr `--dry-run`.
+### Validar GPU
 
-## Dataset esperado
+```powershell
+uv run python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
+```
 
-La estructura esperada es:
+### Validar sintaxis general
+
+```powershell
+uv run python -m py_compile `
+  .\train_orchestrator.py `
+  .\src\model.py `
+  .\src\dataset.py `
+  .\src\metrics.py `
+  .\src\checkpoints.py `
+  .\src\experiment_manifest.py `
+  .\src\plots.py `
+  .\src\visualization.py `
+  .\scripts\analyze_local_inpainting_pos_weight.py `
+  .\scripts\analyze_training_readiness.py `
+  .\scripts\check_dataset_counts.py `
+  .\scripts\check_model_checkpoint_contract.py `
+  .\scripts\inspect_checkpoint.py `
+  .\scripts\recompute_experiment_artifacts.py `
+  .\scripts\write_resume_notes.py
+```
+
+Si no imprime errores, la sintaxis básica está correcta.
+
+## 2. Estructura esperada del dataset
+
+El dataset local debe tener esta estructura:
 
 ```text
 Dataset_U-Net_dual_decoder_fs_li/
@@ -61,28 +82,9 @@ Dataset_U-Net_dual_decoder_fs_li/
         └── metadata.csv
 ```
 
-El dataset local no se versiona en Git. Está excluido mediante `.gitignore`.
+El dataset no se versiona en Git. Debe permanecer ignorado por `.gitignore`.
 
-## Conteo actual del dataset
-
-Conteos validados localmente:
-
-```text
-faceswap/train: 23,338 muestras
-faceswap/test: 2,593 muestras
-
-local_inpainting/train: 22,501 muestras
-local_inpainting/test: 2,499 muestras
-```
-
-Total estimado:
-
-```text
-50,931 muestras completas
-152,793 archivos PNG
-```
-
-Cada muestra completa está formada por:
+Cada muestra completa debe tener:
 
 ```text
 imagen_original
@@ -90,155 +92,486 @@ mascara_autentica
 mascara_fake
 ```
 
-## Validar conteos del dataset
+Validar conteos:
 
 ```powershell
 uv run python .\scripts\check_dataset_counts.py
 ```
 
-Salida esperada:
+Conteos conocidos del dataset local:
 
 ```text
-[faceswap/train]
-imagen_original: 23338
-mascara_autentica: 23338
-mascara_fake: 23338
-OK: 23338 muestras completas
+faceswap/train: 23,338 muestras
+faceswap/test: 2,593 muestras
 
-[faceswap/test]
-imagen_original: 2593
-mascara_autentica: 2593
-mascara_fake: 2593
-OK: 2593 muestras completas
+local_inpainting/train: 22,501 muestras
+local_inpainting/test: 2,499 muestras
 
-[local_inpainting/train]
-imagen_original: 22501
-mascara_autentica: 22501
-mascara_fake: 22501
-OK: 22501 muestras completas
-
-[local_inpainting/test]
-imagen_original: 2499
-mascara_autentica: 2499
-mascara_fake: 2499
-OK: 2499 muestras completas
-
-TOTAL ESTIMADO DE MUESTRAS COMPLETAS: 50931
-TOTAL ESTIMADO DE PNG: 152793
+Total: 50,931 muestras completas
+Total PNG aproximado: 152,793 archivos
 ```
 
-## Validar sintaxis de scripts
+## 3. Componentes principales del repositorio
 
-```powershell
-uv run python -m py_compile `
-  .\train_orchestrator.py `
-  .\src\dataset.py `
-  .\src\metrics.py `
-  .\src\checkpoints.py `
-  .\src\plots.py `
-  .\src\visualization.py
+### `src/model.py`
+
+Define la arquitectura DualSegmentationModel.
+
+El modelo devuelve logits, no probabilidades. La sigmoid se aplica después en métricas y visualización. Esto permite usar BCE con logits de forma estable.
+
+### `src/dataset.py`
+
+Lee imágenes y máscaras desde el dataset estructurado por ataque y split.
+
+Aplica:
+
+- `BILINEAR` para redimensionar imágenes.
+- `NEAREST` para redimensionar máscaras.
+- binarización explícita de máscaras.
+
+### `src/metrics.py`
+
+Contiene:
+
+- conversión de logits a probabilidades;
+- Dice;
+- IoU;
+- precision;
+- recall;
+- F1;
+- accuracy;
+- BCE con logits;
+- Dice Loss;
+- pérdida total dual.
+
+La pérdida actual combina:
+
+```text
+BCE con logits + Dice Loss
 ```
 
-Si no imprime errores, la sintaxis básica está correcta.
+IoU se reporta como métrica, pero no se suma a la pérdida principal.
 
-## Validar el orquestador sin entrenar
+### `src/checkpoints.py`
 
-Modo mixto 256:
+Guarda y carga checkpoints completos:
+
+```text
+model_state
+optimizer_state
+config
+metrics_history
+best_val_loss
+best_val_dice
+scaler_state, si se usa mixed precision
+```
+
+### `src/plots.py`
+
+Genera gráficas desde metrics.csv.
+
+### `src/visualization.py`
+
+Guarda muestras visuales por época:
+
+```text
+image.png
+gt_fake.png
+pred_fake.png
+gt_authentic.png
+pred_authentic.png
+overlay_fake.png
+```
+
+### `train_orchestrator.py`
+
+Orquesta el entrenamiento completo desde un archivo YAML.
+
+## 4. Flujo básico de trabajo
+
+El flujo recomendado siempre es:
+
+1. Crear o elegir YAML.
+2. Ejecutar dry-run.
+3. Revisar preflight.
+4. Entrenar con --yes.
+5. Inspeccionar checkpoint.
+6. Regenerar gráficas/reporte si hace falta.
+7. Leer metrics.csv y fit_report.txt.
+8. Revisar samples visuales.
+9. Elegir best_val_dice.pth o best_val_loss.pth según el objetivo.
+
+## 5. Convención para nombrar archivos YAML
+
+Usar nombres descriptivos. El nombre debe decir:
+
+```text
+ataque
+tipo de experimento
+resolución
+pos_weight
+learning rate
+estabilidad/configuración
+épocas
+batch size, si es relevante
+```
+
+Ejemplos:
+
+```text
+faceswap_training_512_pw2_lr3e4_stable_e15.yaml
+faceswap_benchmark_256_pw2_lr3e4_stable_e20_bs16.yaml
+local_inpainting_training_512_pw33_lr3e4_stable_e15_bs4.yaml
+local_inpainting_finetune_512_from_e06_pw15_lr5e5_e6.yaml
+```
+
+Lectura rápida:
+
+```text
+faceswap_training_512_pw2_lr3e4_stable_e15
+```
+
+Significa:
+
+```text
+ataque: faceswap
+modo: training
+resolución: 512
+pos_weight: 2 aproximadamente
+learning rate: 3e-4
+configuración estable
+épocas: 15
+```
+
+```text
+local_inpainting_finetune_512_from_e06_pw15_lr5e5_e6
+```
+
+Significa:
+
+```text
+ataque: local_inpainting
+modo: fine-tuning
+resolución: 512
+origen: época 6
+pos_weight: 15
+learning rate: 5e-5
+épocas: 6
+```
+
+## 6. Campos principales de un YAML
+
+Ejemplo base:
+
+```yaml
+experiment_name: faceswap_training_512_pw2_lr3e4_stable_e15
+dataset_root: Dataset_U-Net_dual_decoder_fs_li
+output_root: outputs/experiments
+
+attacks:
+  - faceswap
+
+train_split: train
+test_split: test
+image_size: 512
+batch_size: 2
+epochs: 15
+learning_rate: 0.0003
+pos_weight: 2.1
+lambda_bce: 1.0
+lambda_dice: 2.0
+gradient_accumulation_steps: 4
+max_grad_norm: 1.0
+val_ratio: 0.1
+seed: 117
+num_workers: 0
+threshold: 0.5
+checkpoint_every: 1
+sample_every: 1
+mixed_precision: true
+```
+
+Campos importantes:
+
+### `experiment_name`
+
+Nombre de la carpeta que se creará dentro de outputs/experiments/.
+
+### `dataset_root`
+
+Ruta al dataset local.
+
+### `attacks`
+
+Lista de ataques a entrenar. Puede ser uno o varios.
+
+Ejemplo individual:
+
+```yaml
+attacks:
+  - faceswap
+```
+
+Ejemplo mixto:
+
+```yaml
+attacks:
+  - faceswap
+  - local_inpainting
+```
+
+### `image_size`
+
+Resolución cuadrada de entrada. Valores usados:
+
+```text
+256
+512
+```
+
+### `batch_size`
+
+Cantidad de muestras por batch físico.
+
+### `gradient_accumulation_steps`
+
+Cantidad de batches físicos acumulados antes de actualizar pesos.
+
+Batch efectivo:
+
+```text
+batch_size * gradient_accumulation_steps
+```
+
+Ejemplos:
+
+```text
+batch_size 2 * accumulation 4 = batch efectivo 8
+batch_size 4 * accumulation 2 = batch efectivo 8
+batch_size 16 * accumulation 1 = batch efectivo 16
+```
+
+### `pos_weight`
+
+Peso para píxeles positivos en BCE. No debe elegirse al azar. Debe estimarse según el porcentaje real de área blanca en las máscaras.
+
+Valores usados hasta ahora:
+
+```text
+faceswap: 2.1
+local_inpainting: 33.4754694047
+fine-tuning local_inpainting: 15.0
+```
+
+### `lambda_bce` y `lambda_dice`
+
+Pesos de la pérdida compuesta.
+
+Configuración estable usada:
+
+```yaml
+lambda_bce: 1.0
+lambda_dice: 2.0
+```
+
+### `mixed_precision`
+
+Debe estar en true para aprovechar mejor GPU y memoria.
+
+### `max_grad_norm`
+
+Límite de clipping de gradientes. Configuración estable:
+
+```yaml
+max_grad_norm: 1.0
+```
+
+## 7. Validar un YAML antes de entrenar
+
+Siempre ejecutar --dry-run antes de un entrenamiento real:
 
 ```powershell
 uv run python .\train_orchestrator.py `
-  --config .\configs\preflight_mixto_256.yaml `
+  --config .\configs\<archivo>.yaml `
   --dry-run
 ```
 
-Modo mixto 512 reducido:
+El dry-run debe imprimir:
+
+```text
+Experimento
+Dataset
+Ataques
+Image size
+Batch size
+Epochs
+Train samples
+Val samples
+Train batches/epoch
+Val batches/epoch
+Device
+Advertencias, si aplica
+Distribución train
+Distribución val
+```
+
+El dry-run no entrena, no guarda checkpoints y no modifica pesos.
+
+## 8. Ejecutar entrenamiento desde cero
+
+Ejemplo:
 
 ```powershell
 uv run python .\train_orchestrator.py `
-  --config .\configs\preflight_mixto_512_lite.yaml `
-  --dry-run
+  --config .\configs\faceswap_training_512_pw2_lr3e4_stable_e15.yaml `
+  --yes
 ```
 
-El modo `--dry-run` debe validar la configuración, contar muestras, calcular batches aproximados y mostrar advertencias, pero no debe entrenar ni guardar checkpoints reales.
+Durante el entrenamiento revisar:
 
-## Configuraciones disponibles
+```text
+loss
+skipped
+steps
+```
 
-### `configs/mixto_fs_li_256_base.yaml`
+Señales sanas:
 
-Configuración base mixta para `faceswap` y `local_inpainting` en 256x256.
+- skipped=0
+- loss finita
+- val_loss finita
+- val_dice_fake subiendo o estable
 
-### `configs/preflight_mixto_256.yaml`
+Señales de alerta:
 
-Configuración de validación previa para dataset mixto en 256x256.
+- loss=nan
+- loss=inf
+- skipped subiendo constantemente
+- CUDA out of memory
+- val_loss sube mientras train_loss baja durante varias épocas
+- precision muy baja con recall muy alto
 
-### `configs/preflight_mixto_512_lite.yaml`
+## 9. Fine-tuning
 
-Configuración reducida para validar uso de 512x512 sin entrenar todo el dataset. Incluye límites de muestras para pruebas controladas.
+Fine-tuning significa cargar pesos ya aprendidos, pero arrancar con una nueva estrategia de entrenamiento.
 
-### `configs/faceswap_256_base.yaml`
+Usar weights, no resume.
 
-Configuración base para entrenar únicamente con `faceswap`.
+Ejemplo:
 
-### `configs/local_inpainting_256_base.yaml`
+```yaml
+experiment_name: local_inpainting_finetune_512_from_e06_pw15_lr5e5_e6
+dataset_root: Dataset_U-Net_dual_decoder_fs_li
+output_root: outputs/experiments
 
-Configuración base para entrenar únicamente con `local_inpainting`.
+attacks:
+  - local_inpainting
 
-## Parámetros principales del orquestador
+train_split: train
+test_split: test
+image_size: 512
+batch_size: 4
+gradient_accumulation_steps: 2
+epochs: 6
+learning_rate: 0.00005
+pos_weight: 15.0
+lambda_bce: 1.0
+lambda_dice: 2.0
+max_grad_norm: 1.0
+val_ratio: 0.1
+seed: 117
+num_workers: 0
+threshold: 0.5
+checkpoint_every: 1
+sample_every: 1
+mixed_precision: true
 
-El orquestador puede recibir valores desde YAML o desde terminal. Los valores enviados por terminal sobrescriben los del YAML.
+weights: outputs/experiments/local_inpainting_training_512_pw33_lr3e4_stable_e15_bs4/checkpoints/epoch_006.pth
+```
 
-Parámetros principales:
-
-- `experiment_name`
-- `dataset_root`
-- `output_root`
-- `attacks`
-- `image_size`
-- `batch_size`
-- `epochs`
-- `learning_rate`
-- `pos_weight`
-- `val_ratio`
-- `seed`
-- `num_workers`
-- `threshold`
-- `checkpoint_every`
-- `sample_every`
-- `mixed_precision`
-- `max_train_samples`
-- `max_val_samples`
-- `max_test_samples`
-- `resume`
-- `weights`
-- `device`
-- `dry_run`
-- `yes`
-
-## Sobrescritura por terminal
-
-Ejemplo de validación 512 sin entrenamiento real:
+Ejecutar:
 
 ```powershell
 uv run python .\train_orchestrator.py `
-  --config .\configs\preflight_mixto_256.yaml `
-  --experiment-name dry_512_mixto `
-  --image-size 512 `
-  --batch-size 2 `
-  --epochs 1 `
-  --max-train-samples 100 `
-  --max-val-samples 40 `
-  --dry-run
+  --config .\configs\local_inpainting_finetune_512_from_e06_pw15_lr5e5_e6.yaml `
+  --yes
 ```
 
-Este comando solo valida configuración. No ejecuta entrenamiento real.
+Usar fine-tuning cuando:
 
-## Artefactos esperados durante entrenamiento futuro
+- el modelo ya aprendió a encontrar la región;
+- el recall es alto;
+- la precision es baja;
+- el modelo sobrepinta;
+- se quiere bajar learning_rate;
+- se quiere reducir pos_weight;
+- se quiere limpiar bordes sin empezar desde cero.
 
-Cuando el entrenamiento real sea autorizado, cada experimento generará:
+## 10. Resume
+
+Resume significa continuar el mismo experimento desde un checkpoint completo.
+
+Usar --resume.
+
+Ejemplo:
+
+```powershell
+uv run python .\train_orchestrator.py `
+  --config .\outputs\experiments\<experiment_name>\config.resolved.json `
+  --resume .\outputs\experiments\<experiment_name>\checkpoints\last.pth
+```
+
+Diferencia importante:
+
+- weights = carga solo pesos del modelo; sirve para fine-tuning.
+- resume = carga modelo + optimizer + scaler + historial; sirve para continuar el mismo entrenamiento.
+
+## 11. Analizar pos_weight
+
+Para local_inpainting, calcular el área blanca real:
+
+```powershell
+uv run python .\scripts\analyze_local_inpainting_pos_weight.py `
+  --mask-dir .\Dataset_U-Net_dual_decoder_fs_li\local_inpainting\train\mascara_fake `
+  --workers 4
+```
+
+Salida relevante:
+
+```text
+Global positive fraction
+Global negative fraction
+Suggested pos_weight negative/positive
+```
+
+Resultado obtenido para local_inpainting:
+
+```text
+Global positive fraction: 0.0290061315
+Global negative fraction: 0.9709938685
+Suggested pos_weight: 33.4754694047
+```
+
+Interpretación:
+
+- solo 2.9% de los píxeles son positivos;
+- la clase positiva es pequeña;
+- por eso el pos_weight matemático es alto.
+
+Sin embargo, un pos_weight muy alto puede provocar que el modelo sobrepinte. En ese caso, se puede hacer fine-tuning con un valor menor, por ejemplo:
+
+```yaml
+pos_weight: 15.0
+```
+
+## 12. Artefactos generados por experimento
+
+Cada entrenamiento crea:
 
 ```text
 outputs/experiments/<experiment_name>/
 ├── config.resolved.json
+├── run_manifest.json
 ├── fit_report.txt
 ├── checkpoints/
 │   ├── last.pth
@@ -250,9 +583,16 @@ outputs/experiments/<experiment_name>/
 ├── plots/
 │   ├── loss_total_curve.png
 │   ├── loss_fake_curve.png
+│   ├── loss_authentic_curve.png
 │   ├── dice_fake_curve.png
 │   ├── iou_fake_curve.png
+│   ├── precision_fake_curve.png
+│   ├── recall_fake_curve.png
+│   ├── f1_fake_curve.png
+│   ├── accuracy_fake_curve.png
 │   ├── precision_recall_f1_curve.png
+│   ├── dice_authentic_curve.png
+│   ├── iou_authentic_curve.png
 │   └── overfit_loss_gap.png
 └── samples/
     └── epoch_XXX/
@@ -265,218 +605,274 @@ outputs/experiments/<experiment_name>/
             └── overlay_fake.png
 ```
 
-## Checkpoints
+## 13. Inspeccionar checkpoint
 
-El orquestador debe guardar checkpoints completos, no solo pesos del modelo.
+```powershell
+uv run python .\scripts\inspect_checkpoint.py `
+  .\outputs\experiments\<experiment_name>\checkpoints\last.pth
+```
 
-Un checkpoint completo incluye:
+Este comando muestra:
 
 ```text
 epoch
-model_state
-optimizer_state
-config
-metrics_history
 best_val_loss
 best_val_dice
-scaler_state, si se usa mixed precision
+config
+última fila de métricas
+comando conceptual de resume
 ```
 
-Esto permite reanudar entrenamiento desde otro equipo, Colab o una sesión futura.
-
-## Reanudación futura de entrenamiento
-
-Cuando se autorice entrenamiento real, la reanudación se hará con `--resume` apuntando a un checkpoint completo.
-
-Ejemplo conceptual:
+## 14. Regenerar gráficas y reporte sin entrenar
 
 ```powershell
-uv run python .\train_orchestrator.py `
-  --config .\configs\mixto_fs_li_256_base.yaml `
-  --resume .\outputs\experiments\<experiment_name>\checkpoints\last.pth
+uv run python .\scripts\recompute_experiment_artifacts.py `
+  .\outputs\experiments\<experiment_name>
 ```
 
-Este flujo todavía debe validarse antes de usarse en entrenamiento real.
-
-## Métricas principales
-
-El foco principal de evaluación está en la máscara manipulada o fake:
-
-- `dice_fake`
-- `iou_fake`
-- `precision_fake`
-- `recall_fake`
-- `f1_fake`
-- `accuracy_fake`
-
-La máscara auténtica también se evalúa porque el modelo tiene doble decoder, pero el análisis principal de la tesis debe centrarse en la localización de la región manipulada.
-
-## Reporte de ajuste
-
-El archivo `fit_report.txt` debe resumir señales de:
-
-- posible overfitting;
-- posible underfitting;
-- brecha entre entrenamiento y validación;
-- comportamiento de pérdida;
-- comportamiento de Dice fake.
-
-El reporte no sustituye el análisis humano. Solo funciona como alerta heurística.
-
-## Uso local
-
-El entorno local usa:
+Esto vuelve a generar:
 
 ```text
-Python 3.12
-uv
-PyTorch CUDA
-RTX 4050 Laptop GPU
+plots/
+fit_report.txt
 ```
 
-Validación de CUDA:
+a partir de metrics.csv.
+
+## 15. Generar notas de reanudación
 
 ```powershell
-uv run python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
+uv run python .\scripts\write_resume_notes.py `
+  .\outputs\experiments\<experiment_name>
 ```
 
-## Uso futuro en Colab
-
-Para Colab se debe conservar la misma estructura lógica del repo y del dataset. El flujo recomendado será:
-
-1. montar Google Drive;
-2. ubicar el repo en Drive o subirlo temporalmente;
-3. instalar dependencias;
-4. validar conteos del dataset;
-5. ejecutar `--dry-run`;
-6. reanudar o iniciar entrenamiento solo cuando esté autorizado.
-
-La documentación exacta de Colab se agregará antes del primer entrenamiento real.
-
-## Commits locales actuales
-
-El repositorio usa control de versiones local. No se subirá a GitHub hasta tener al menos el primer entrenamiento validado.
-
-Commits base:
+Genera:
 
 ```text
-13ebe62 Inicializa entorno de entrenamiento U-Net dual decoder
-4fb57ff Agrega orquestador base de entrenamiento
-53982d4 Completa monitoreo del orquestador
+README_RESUME.md
 ```
 
-## Pendientes antes de entrenar
+dentro de la carpeta del experimento.
 
-Antes de iniciar entrenamiento real falta cerrar:
+## 16. Leer metrics.csv
 
-1. README local/Colab final.
-2. Validación de `--dry-run` sin inicializar GPU innecesariamente.
-3. Revisión de `resume` y checkpoints.
-4. Revisión de compatibilidad del modelo con la función de pérdida.
-5. Revisión de configuración 512.
-6. Validación de rutas en entorno local.
-7. Decisión explícita del primer experimento real.
+metrics.csv es la tabla principal del experimento. Cada fila representa una época.
 
-## Preparación para Colab
-
-El proyecto está preparado para moverse entre equipo local, otra PC y Colab siempre que se conserven:
-
-- el mismo repo o un repo compatible;
-- el mismo commit Git o uno compatible;
-- `config.resolved.json`;
-- `run_manifest.json`;
-- `metrics/metrics.csv`;
-- `checkpoints/last.pth`;
-- `checkpoints/best_val_loss.pth`, si existe;
-- `checkpoints/best_val_dice.pth`, si existe.
-
-### Flujo conceptual en Colab
-
-1. Montar Google Drive.
-2. Ubicar el repo dentro de Drive o copiarlo a `/content`.
-3. Instalar dependencias.
-4. Verificar dataset.
-5. Ejecutar `--dry-run`.
-6. Inspeccionar checkpoint si se va a reanudar.
-7. Reanudar con `--resume` solo cuando el entorno esté validado.
-
-### Archivos mínimos para reanudar en otra máquina
+Columnas principales:
 
 ```text
-outputs/experiments/<experiment_name>/
-├── config.resolved.json
-├── run_manifest.json
-├── metrics/
-│   └── metrics.csv
-└── checkpoints/
-    ├── last.pth
-    ├── best_val_loss.pth
-    └── best_val_dice.pth
-
+epoch
+train_loss_total
+val_loss_total
+train_dice_fake
+val_dice_fake
+train_iou_fake
+val_iou_fake
+train_precision_fake
+val_precision_fake
+train_recall_fake
+val_recall_fake
+train_f1_fake
+val_f1_fake
+train_accuracy_fake
+val_accuracy_fake
+train_skipped_nonfinite_batches
+val_skipped_nonfinite_batches
 ```
 
-### Reanudar entrenamiento
+Criterios prácticos:
 
-```powershell
-uv run python .\train_orchestrator.py `
-  --config .\outputs\experiments\<experiment_name>\config.resolved.json `
-  --resume .\outputs\experiments\<experiment_name>\checkpoints\last.pth
+### `val_dice_fake`
+
+Métrica principal para elegir el mejor modelo de segmentación.
+
+### `val_iou_fake`
+
+Métrica más estricta de solapamiento.
+
+### `val_precision_fake`
+
+Indica si el modelo está pintando de más.
+
+### `val_recall_fake`
+
+Indica si el modelo está encontrando la región manipulada real.
+
+### `val_loss_total`
+
+Sirve para ver estabilidad general, pero no siempre el menor loss produce la mejor máscara visual.
+
+### `overfit_loss_gap`
+
+Si train_loss baja y val_loss sube, hay señal de sobreajuste.
+
+## 17. Elegir el mejor checkpoint
+
+Para segmentación fake, el candidato principal suele ser:
+
+```text
+checkpoints/best_val_dice.pth
 ```
 
-### Inspeccionar checkpoint sin GPU
+También revisar:
 
-```powershell
-uv run python .\scripts\inspect_checkpoint.py `  .\outputs\experiments\<experiment_name>\checkpoints\last.pth
+```text
+checkpoints/best_val_loss.pth
+checkpoints/epoch_XXX.pth
 ```
 
-### Regenerar gráficas sin entrenar
+Criterio recomendado:
 
-```powershell
-uv run python .\scripts\recompute_experiment_artifacts.py`
-.\outputs\experiments\<experiment_name>
+1. elegir el mayor val_dice_fake;
+2. confirmar que val_iou_fake también sea alto;
+3. revisar precision y recall;
+4. abrir samples visuales;
+5. evitar un modelo que tenga buena métrica pero sobrepinte visualmente.
+
+## 18. Interpretar precision y recall
+
+### Caso 1
+
+```text
+recall alto
+precision baja
 ```
 
-# Regla para Colab
+El modelo encuentra casi toda la alteración, pero pinta de más. Hay muchos falsos positivos.
 
-Antes de reanudar o iniciar entrenamiento en Colab, se debe ejecutar primero --dry-run. Si el dry-run no pasa, no se entrena.
+### Caso 2
 
----
-
-## Validación final sin entrenar
-
-Ejecuta:
-
-```powershell
-uv run python -m py_compile `
-  .\train_orchestrator.py `
-  .\src\model.py `
-  .\src\dataset.py `
-  .\src\metrics.py `
-  .\src\checkpoints.py `
-  .\src\plots.py `
-  .\src\visualization.py `
-  .\src\experiment_manifest.py `
-  .\scripts\inspect_checkpoint.py `
-  .\scripts\recompute_experiment_artifacts.py `
-  .\scripts\write_resume_notes.py `
-  .\scripts\check_model_checkpoint_contract.py
+```text
+precision alta
+recall bajo
 ```
 
-Luego dry-run de la config final:
+El modelo pinta poco y con cuidado, pero deja zonas alteradas sin detectar.
 
-```powershell
-uv run python .\train_orchestrator.py `
-  --config .\configs\faceswap_first_training.yaml `
-  --dry-run
+### Caso 3
+
+```text
+precision y recall equilibrados
 ```
 
-Ese dry-run debe calcular solo faceswap/train, no mixto. Esperado aproximado:
+El modelo suele tener mejor Dice/F1.
 
+## 19. Experimentos relevantes actuales
+
+### Faceswap 512 estable
+
+```text
+configs/faceswap_training_512_pw2_lr3e4_stable_e15.yaml
 ```
-Ataques: faceswap
-Image size: 512x512
-Batch size: 2
-Epochs: 20
-Train samples: ~21005
-Val samples: ~2333
+
+Uso:
+
+- Entrenamiento faceswap a 512x512.
+- pos_weight: 2.1.
+- batch_size: 2.
+- gradient_accumulation_steps: 4.
+
+Resultado observado:
+
+- mejor época práctica alrededor de epoch 14;
+- val_dice_fake aproximado: 0.965;
+- val_iou_fake aproximado: 0.934.
+
+### Faceswap 256 benchmark
+
+```text
+configs/faceswap_benchmark_256_pw2_lr3e4_stable_e20_bs16.yaml
 ```
+
+Uso:
+
+- Benchmark/ablación a 256x256 para comparar contra modelos de menor resolución.
+- batch_size: 16.
+- mixed_precision: true.
+
+### Local inpainting 512 inicial
+
+```text
+configs/local_inpainting_training_512_pw33_lr3e4_stable_e15_bs4.yaml
+```
+
+Uso:
+
+- Entrenamiento desde cero para local_inpainting.
+- pos_weight: 33.4754694047.
+- batch_size: 4.
+
+Resultado observado:
+
+- el pos_weight alto aumentó recall, pero bajó precision;
+- el modelo tendía a sobrepintar.
+
+### Local inpainting fine-tuning
+
+```text
+configs/local_inpainting_finetune_512_from_e06_pw15_lr5e5_e6.yaml
+```
+
+Uso:
+
+- Fine-tuning desde época 6.
+- pos_weight reducido a 15.
+- learning_rate: 5e-5.
+
+Resultado observado:
+
+- mejoró el Dice aproximadamente 5 puntos;
+- pico reportado en época 3;
+- val_dice_fake aproximado: 0.777.
+
+## 20. Limpieza de archivos temporales
+
+No versionar archivos temporales de trabajo como:
+
+```text
+comandos.txt
+cambios.diff
+src_comment_context.txt
+dataset_audit_full.txt
+```
+
+Los experimentos grandes en outputs/ tampoco deben versionarse salvo que se decida guardar un resumen específico.
+
+## 21. Código legacy
+
+El repositorio conserva código legacy para comparación:
+
+```text
+codigo Deepshield/
+├── model.py
+├── train.py
+└── test.py
+
+Modelo_U_Net_dual_decoder.py
+Train_UDD.py
+Test_UDD.py
+```
+
+Ese código sirve como referencia histórica. El flujo operativo actual debe usar:
+
+```text
+train_orchestrator.py
+src/
+configs/
+scripts/
+```
+
+## 22. Regla final antes de dejar entrenando toda la noche
+
+Antes de dejar un entrenamiento largo corriendo:
+
+1. validar sintaxis con py_compile;
+2. correr dry-run del YAML;
+3. confirmar ataque correcto;
+4. confirmar image_size;
+5. confirmar batch_size y accumulation;
+6. confirmar pos_weight;
+7. revisar que mixed_precision esté en true;
+8. revisar que checkpoint_every sea 1;
+9. vigilar los primeros minutos;
+10. detener si hay OOM, NaN, Inf o skipped subiendo constantemente.
