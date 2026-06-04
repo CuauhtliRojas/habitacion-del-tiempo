@@ -5,8 +5,28 @@ from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
 
+"""
+Este archivo genera gráficas y reportes simples a partir de metrics.csv.
+
+No entrena el modelo ni recalcula métricas desde imágenes. Solo toma la tabla
+que dejó el entrenamiento y la convierte en artefactos fáciles de revisar.
+
+Sirve para responder preguntas prácticas:
+- si la pérdida baja o se estanca;
+- si validación se separa demasiado de entrenamiento;
+- si Dice e IoU mejoran;
+- si precision y recall están equilibrados;
+- si hay señales de sobreajuste o subajuste.
+"""
 
 def _read_metrics(metrics_csv: str | Path) -> pd.DataFrame:
+    """
+    Lee metrics.csv y valida lo mínimo para poder graficar.
+
+    Si el archivo no existe, está vacío o no tiene columna epoch, se detiene el
+    proceso. Es mejor fallar con un mensaje claro que generar gráficas vacías o
+    engañosas.
+    """
     metrics_csv = Path(metrics_csv)
 
     if not metrics_csv.exists():
@@ -31,9 +51,20 @@ def _plot_columns(
     ylabel: str,
     output_path: str | Path,
 ) -> None:
+    """
+    Grafica una o varias columnas contra epoch.
+
+    La función ignora columnas que no existan en metrics.csv. Esto permite que
+    el script siga funcionando aunque un experimento viejo tenga menos métricas
+    que uno nuevo.
+    """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    """
+    Solo se grafican columnas realmente disponibles. Si ninguna existe, no se
+    genera archivo para evitar una imagen vacía.
+    """
     available = [column for column in columns if column in df.columns]
 
     if not available:
@@ -59,12 +90,29 @@ def generate_training_plots(
     metrics_csv: str | Path,
     output_dir: str | Path,
 ) -> list[Path]:
+    """
+    Genera las gráficas principales del entrenamiento.
+
+    Cada gráfica se guarda como PNG dentro de la carpeta plots del experimento.
+    Estas imágenes sirven para revisar rápidamente si el entrenamiento mejoró,
+    se estancó o empezó a sobreajustarse.
+    """
     df = _read_metrics(metrics_csv)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     generated: list[Path] = []
 
+    """
+    Lista de gráficas actuales.
+
+    Todas estas métricas sí se usan ahora para revisar el entrenamiento:
+    - loss: estabilidad general;
+    - Dice e IoU: calidad de segmentación;
+    - precision/recall/F1: equilibrio entre pintar de más y detectar de menos;
+    - accuracy: referencia secundaria;
+    - métricas authentic: control de la segunda salida del modelo.
+    """
     plot_specs = [
         (
             ["train_loss_total", "val_loss_total"],
@@ -152,6 +200,12 @@ def generate_training_plots(
             generated.append(path)
 
     if {"train_loss_total", "val_loss_total"}.issubset(df.columns):
+        """
+        La brecha val-train ayuda a detectar sobreajuste.
+
+        Si la pérdida de entrenamiento baja pero la de validación se aleja, el
+        modelo puede estar memorizando mejor el train que generalizando.
+        """
         gap_path = output_dir / "overfit_loss_gap.png"
         gap = df["val_loss_total"] - df["train_loss_total"]
 
@@ -178,6 +232,15 @@ def analyze_fit_status(
     patience: int = 4,
     dice_gap_threshold: float = 0.15,
 ) -> str:
+    """
+    Genera un reporte textual simple sobre el ajuste del entrenamiento.
+
+    No reemplaza la revisión humana ni las muestras visuales. Solo busca señales
+    rápidas:
+    - posible sobreajuste si validación deja de mejorar mientras train mejora;
+    - posible sobreajuste si Dice train supera demasiado a Dice val;
+    - posible subajuste si Dice sigue bajo en train y validación.
+    """
     df = _read_metrics(metrics_csv)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -187,6 +250,10 @@ def analyze_fit_status(
     messages.append(f"Epochs registradas: {len(df)}")
 
     if len(df) < 2:
+        """
+        Con una sola época no hay tendencia. Se puede registrar el reporte, pero
+        todavía no tiene sentido diagnosticar sobreajuste o subajuste.
+        """
         messages.append("Aun no hay suficientes epochs para diagnosticar overfitting o underfitting.")
         report = "\n".join(messages)
         output_path.write_text(report, encoding="utf-8")
@@ -204,6 +271,10 @@ def analyze_fit_status(
         messages.append(f"Brecha val-train loss: {loss_gap:.6f}")
 
         if len(df) >= patience:
+            """
+            Señal práctica de sobreajuste:
+            train mejora, pero validación no mejora durante varias épocas.
+            """
             recent_val = df["val_loss_total"].tail(patience).to_list()
             val_non_improving = all(
                 recent_val[index] >= recent_val[index - 1]
@@ -220,6 +291,12 @@ def analyze_fit_status(
                 )
 
     if {"train_dice_fake", "val_dice_fake"}.issubset(df.columns):
+        """
+        Dice fake es la métrica central para revisar la máscara manipulada.
+
+        La brecha train-val ayuda a ver si el modelo aprendió demasiado bien el
+        conjunto de entrenamiento, pero no generaliza igual en validación.
+        """
         train_dice = float(latest["train_dice_fake"])
         val_dice = float(latest["val_dice_fake"])
         dice_gap = train_dice - val_dice
