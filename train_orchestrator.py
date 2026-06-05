@@ -26,8 +26,34 @@ from src.metrics import dual_segmentation_loss, segmentation_metric_row
 from src.plots import analyze_fit_status, generate_training_plots
 from src.visualization import save_epoch_samples
 
+"""
+Este archivo es el punto de entrada del entrenamiento.
+
+A diferencia del código antiguo en codigo Deepshield/train.py, aquí el
+entrenamiento se organiza como un orquestador: lee configuración desde YAML,
+prepara dataset, crea carpetas de experimento, entrena, valida, guarda métricas,
+genera gráficas, guarda muestras visuales y crea checkpoints completos.
+
+La arquitectura queda separada en módulos:
+- src/dataset.py prepara las muestras.
+- src/model.py define la red.
+- src/metrics.py calcula pérdidas y métricas.
+- src/checkpoints.py guarda y carga estados de entrenamiento.
+- src/visualization.py genera muestras visuales.
+- src/plots.py genera gráficas y reporte de ajuste.
+- src/experiment_manifest.py registra la ficha técnica del experimento.
+
+Esto permite repetir experimentos, reanudar entrenamientos y comparar resultados
+sin modificar el código Python cada vez.
+"""
 
 def parse_bool(value: str | bool | None) -> bool | None:
+    """
+    Convierte valores de texto en booleanos.
+
+    Se usa para argumentos como --mixed-precision, donde puede llegar texto desde
+    consola. Acepta variantes como true, false, yes, no, si o sí.
+    """
     if value is None or isinstance(value, bool):
         return value
 
@@ -43,6 +69,12 @@ def parse_bool(value: str | bool | None) -> bool | None:
 
 
 def load_config(path: str | Path) -> dict[str, Any]:
+    """
+    Lee el archivo YAML del experimento.
+
+    El YAML concentra hiperparámetros y rutas. Así se puede cambiar resolución,
+    batch, ataque, epochs o pos_weight sin editar el código fuente.
+    """
     with open(path, "r", encoding="utf-8") as file:
         data = yaml.safe_load(file)
 
@@ -53,7 +85,17 @@ def load_config(path: str | Path) -> dict[str, Any]:
 
 
 def apply_overrides(config: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    """
+    Aplica cambios recibidos por consola sobre la configuración YAML.
+
+    Esto permite usar un mismo archivo base y modificar valores puntuales desde
+    línea de comandos, por ejemplo batch_size, epochs o ruta de resume.
+    """
     config = dict(config)
+    """
+    Solo se reemplazan valores que sí llegaron por argumento.
+    Si un argumento viene como None, se conserva el valor original del YAML.
+    """
 
     overrides = {
         "experiment_name": args.experiment_name,
@@ -93,6 +135,13 @@ def apply_overrides(config: dict[str, Any], args: argparse.Namespace) -> dict[st
 
 
 def get_device(requested: str | None = None, *, dry_run: bool = False) -> torch.device:
+    """
+    Decide dónde correr el experimento.
+
+    Si el usuario pide un device específico, se respeta. En dry-run se usa CPU
+    para validar configuración sin consultar GPU. En entrenamiento real se usa
+    CUDA cuando está disponible.
+    """
     if requested:
         return torch.device(requested)
 
@@ -103,6 +152,12 @@ def get_device(requested: str | None = None, *, dry_run: bool = False) -> torch.
 
 
 def get_gpu_info(device: torch.device, *, dry_run: bool = False) -> dict[str, Any]:
+    """
+    Obtiene información básica de GPU y CUDA.
+
+    Estos datos se imprimen antes de entrenar para saber si el experimento corre
+    en CPU o GPU, y cuánta VRAM hay disponible.
+    """
     if dry_run:
         return {
             "device": "dry-run/cpu",
@@ -129,6 +184,13 @@ def get_gpu_info(device: torch.device, *, dry_run: bool = False) -> dict[str, An
 
 
 def print_preflight(config: dict[str, Any], gpu_info: dict[str, Any], train_count: int, val_count: int) -> None:
+    """
+    Muestra un resumen antes de iniciar el entrenamiento.
+
+    Sirve como revisión rápida: confirma dataset, ataques, resolución, batch,
+    epochs, cantidad de muestras, device y VRAM. Esto evita lanzar entrenamientos
+    largos con una configuración equivocada.
+    """
     batch_size = int(config["batch_size"])
     image_size = int(config["image_size"])
     epochs = int(config["epochs"])
@@ -152,6 +214,13 @@ def print_preflight(config: dict[str, Any], gpu_info: dict[str, Any], train_coun
     print(f"CUDA disponible: {gpu_info['cuda_available']}")
     print(f"GPU: {gpu_info['gpu_name']}")
     print(f"VRAM total GB: {gpu_info['total_vram_gb']}")
+
+    """
+    Las advertencias no detienen el entrenamiento.
+
+    Solo avisan posibles riesgos prácticos, por ejemplo usar 512x512 con un batch
+    alto en una GPU con poca VRAM.
+    """
 
     warnings = []
 
@@ -179,6 +248,12 @@ def print_preflight(config: dict[str, Any], gpu_info: dict[str, Any], train_coun
 
 
 def confirm_or_exit(args: argparse.Namespace) -> None:
+    """
+    Pide confirmación antes de iniciar un entrenamiento real.
+
+    Si se usa --yes, no pregunta. Si es dry-run, tampoco pregunta porque no se
+    entrenará el modelo.
+    """
     if args.yes or args.dry_run:
         return
 
@@ -190,6 +265,12 @@ def confirm_or_exit(args: argparse.Namespace) -> None:
 
 
 def make_experiment_dirs(config: dict[str, Any]) -> dict[str, Path]:
+    """
+    Crea la estructura de carpetas del experimento.
+
+    Cada entrenamiento guarda sus resultados en una carpeta propia con
+    checkpoints, métricas, gráficas y muestras visuales.
+    """
     experiment_root = Path(config["output_root"]) / config["experiment_name"]
 
     dirs = {
@@ -207,11 +288,22 @@ def make_experiment_dirs(config: dict[str, Any]) -> dict[str, Path]:
 
 
 def write_config_snapshot(config: dict[str, Any], path: Path) -> None:
+    """
+    Guarda una copia de la configuración ya resuelta.
+
+    Esto deja registro del YAML final después de aplicar overrides de consola.
+    """
     with open(path, "w", encoding="utf-8") as file:
         json.dump(config, file, indent=2, ensure_ascii=False)
 
 
 def append_metrics_csv(path: Path, row: dict[str, Any]) -> None:
+    """
+    Agrega una fila al archivo metrics.csv.
+
+    Cada fila representa una época. Los valores no se suman con épocas anteriores:
+    se guardan como promedios de train y validación para esa época.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
 
     exists = path.exists()
@@ -226,6 +318,11 @@ def append_metrics_csv(path: Path, row: dict[str, Any]) -> None:
 
 
 def average_dicts(rows: list[dict[str, float]]) -> dict[str, float]:
+    """
+    Promedia una lista de diccionarios numéricos.
+
+    Se usa para convertir métricas por batch en una métrica promedio de época.
+    """
     if not rows:
         return {}
 
@@ -244,8 +341,15 @@ def run_epoch(
     device: torch.device,
     config: dict[str, Any],
     phase: str,
-    scaler: torch.cuda.amp.GradScaler | None,
+    scaler: torch.amp.GradScaler | None,
 ) -> dict[str, Any]:
+    """
+    Ejecuta una época completa de entrenamiento o validación.
+
+    En modo train actualiza pesos. En modo val solo evalúa. La misma función
+    calcula pérdida, métricas globales, métricas por ataque y conteo de batches
+    no finitos.
+    """
     is_train = phase == "train"
 
     if is_train:
@@ -259,7 +363,12 @@ def run_epoch(
 
     skipped_nonfinite_batches = 0
     optimizer_steps = 0
+    """
+    La acumulación de gradientes permite simular un batch efectivo mayor.
 
+    Por ejemplo, batch_size 4 con gradient_accumulation_steps 2 equivale a
+    acumular gradiente de 8 muestras antes de actualizar pesos.
+    """
     accumulation_steps = int(config.get("gradient_accumulation_steps", 1) or 1)
     if accumulation_steps < 1:
         accumulation_steps = 1
@@ -270,6 +379,19 @@ def run_epoch(
     max_grad_norm = float(config.get("max_grad_norm", 0.0) or 0.0)
     lambda_bce = float(config.get("lambda_bce", 1.0))
     lambda_dice = float(config.get("lambda_dice", 1.0))
+    """
+    lambda_iou permite activar o apagar la pérdida IoU.
+
+    Con 0.0 se usa BCE + Dice. 
+    """
+    lambda_iou = float(config.get("lambda_iou", 0.0))
+
+    """
+    mixed_precision activa autocast solo cuando hay CUDA.
+
+    Esto reduce uso de VRAM en GPU y ayuda a entrenar imágenes más grandes, como
+    512x512, sin cambiar la arquitectura del modelo.
+    """
 
     use_amp = bool(config.get("mixed_precision", False)) and device.type == "cuda"
 
@@ -280,6 +402,12 @@ def run_epoch(
     accumulated_batches = 0
 
     def optimizer_step() -> None:
+        """
+        Aplica un paso del optimizador.
+
+        Si se usa mixed precision, primero se desescala el gradiente para poder
+        aplicar clipping de forma correcta. Después se actualiza el scaler.
+        """
         nonlocal optimizer_steps
 
         if not is_train:
@@ -288,6 +416,10 @@ def run_epoch(
         assert optimizer is not None
 
         if scaler is not None and use_amp:
+            """
+            Cuando AMP está activo, GradScaler ayuda a evitar problemas numéricos
+            propios de FP16 durante el backward.
+            """
             if max_grad_norm > 0.0:
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
@@ -310,9 +442,19 @@ def run_epoch(
         fake_masks = batch["fake_mask"].to(device)
         authentic_masks = batch["authentic_mask"].to(device)
         attacks = batch["attack"]
+        """
+        En entrenamiento se habilitan gradientes. En validación se apagan para
+        ahorrar memoria y evitar modificar el modelo.
+        """
 
         with torch.set_grad_enabled(is_train):
-            with torch.cuda.amp.autocast(enabled=use_amp):
+            with torch.amp.autocast(device_type=device.type, enabled=use_amp):
+                """
+                autocast permite ejecutar operaciones compatibles en menor precisión.
+
+                La pérdida sigue siendo estable porque src/metrics.py trabaja con
+                BCE con logits y convierte a float cuando hace falta.
+                """
                 pred_fake, pred_authentic = model(images)
 
                 loss, loss_parts = dual_segmentation_loss(
@@ -323,14 +465,31 @@ def run_epoch(
                     pos_weight=float(config["pos_weight"]),
                     lambda_bce=lambda_bce,
                     lambda_dice=lambda_dice,
+                    lambda_iou=lambda_iou,
                 )
+            """
+            Si la pérdida sale NaN o infinita, el batch se salta.
+
+            Esto evita contaminar el entrenamiento, metrics.csv y los checkpoints
+            con valores no finitos.
+            """    
 
             if not bool(torch.isfinite(loss.detach()).all().item()):
                 skipped_nonfinite_batches += 1
                 progress.set_postfix(loss="nonfinite", skipped=skipped_nonfinite_batches)
                 continue
+            """
+            En train se hace backward. En validación solo se calculan pérdidas y
+            métricas, pero no se actualizan pesos.
+            """
 
             if is_train:
+                """
+                La pérdida se divide entre los pasos de acumulación.
+
+                Esto mantiene la escala del gradiente parecida a la de un batch
+                grande real.
+                """
                 loss_for_backward = loss / accumulation_steps
 
                 if scaler is not None and use_amp:
@@ -406,6 +565,7 @@ def run_epoch(
         "max_grad_norm": max_grad_norm,
         "lambda_bce": lambda_bce,
         "lambda_dice": lambda_dice,
+        "lambda_iou": lambda_iou,
     }
 
     for attack, rows in per_attack_rows.items():
@@ -545,7 +705,8 @@ def main() -> None:
     model = DualSegmentationModel().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=float(config["learning_rate"]))
 
-    scaler = torch.cuda.amp.GradScaler(
+    scaler = torch.amp.GradScaler(
+        "Usa cuda",
         enabled=bool(config.get("mixed_precision", False)) and device.type == "cuda"
     )
 
@@ -628,18 +789,23 @@ def main() -> None:
             "val_iou_authentic": val_metrics.get("iou_authentic"),
             "train_loss_fake_bce": train_metrics.get("loss_fake_bce"),
             "train_loss_fake_dice": train_metrics.get("loss_fake_dice"),
+            "train_loss_fake_iou": train_metrics.get("loss_fake_iou"),
             "train_loss_authentic_bce": train_metrics.get("loss_authentic_bce"),
             "train_loss_authentic_dice": train_metrics.get("loss_authentic_dice"),
+            "train_loss_authentic_iou": train_metrics.get("loss_authentic_iou"),
             "train_skipped_nonfinite_batches": train_metrics.get("skipped_nonfinite_batches"),
             "train_optimizer_steps": train_metrics.get("optimizer_steps"),
             "train_gradient_accumulation_steps": train_metrics.get("gradient_accumulation_steps"),
             "train_max_grad_norm": train_metrics.get("max_grad_norm"),
             "train_lambda_bce": train_metrics.get("lambda_bce"),
             "train_lambda_dice": train_metrics.get("lambda_dice"),
+            "train_lambda_iou": train_metrics.get("lambda_iou"),
             "val_loss_fake_bce": val_metrics.get("loss_fake_bce"),
             "val_loss_fake_dice": val_metrics.get("loss_fake_dice"),
+            "val_loss_fake_iou": val_metrics.get("loss_fake_iou"),
             "val_loss_authentic_bce": val_metrics.get("loss_authentic_bce"),
             "val_loss_authentic_dice": val_metrics.get("loss_authentic_dice"),
+            "val_loss_authentic_iou": val_metrics.get("loss_authentic_iou"),
             "val_skipped_nonfinite_batches": val_metrics.get("skipped_nonfinite_batches"),
         }
 

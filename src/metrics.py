@@ -16,9 +16,10 @@ Idea general:
 - La pérdida BCE trabaja con logits.
 - Las métricas convierten esos logits a probabilidades con sigmoid.
 - Dice se usa como parte de la pérdida porque ayuda a cuidar la forma de la máscara.
-- IoU se conserva como métrica porque es útil para evaluar, pero no se suma a la
-  pérdida principal para no duplicar la presión geométrica.
-
+- IoU se conserva como métrica y también puede usarse como pérdida opcional.
+- Si lambda_iou es 0.0, el entrenamiento usa BCE + Dice.
+- Si lambda_iou es mayor que 0.0, el entrenamiento añade presión geométrica IoU
+  de forma controlada y registrada en metrics.csv.
 Referencias:
 https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.binary_cross_entropy_with_logits.html
 https://docs.pytorch.org/docs/stable/generated/torch.nn.BCEWithLogitsLoss.html
@@ -251,6 +252,23 @@ def soft_dice_loss(logits: torch.Tensor, target: torch.Tensor, smooth: float = 1
 
     return 1.0 - dice.mean()
 
+def soft_iou_loss(logits: torch.Tensor, target: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """
+    Calcula la pérdida IoU suave.
+
+    Se aplica sigmoid una sola vez dentro de logits_to_probabilities.
+    Así se conserva la idea geométrica del IoU del código Deepshiel, pero sin volver
+    a poner sigmoid dentro del modelo.
+    """
+    pred = logits_to_probabilities(logits)
+    target = target.float()
+
+    intersection = (pred * target).sum(dim=(1, 2, 3))
+    union = pred.sum(dim=(1, 2, 3)) + target.sum(dim=(1, 2, 3)) - intersection
+
+    iou = (intersection + eps) / (union + eps)
+
+    return 1.0 - iou.mean()
 
 def dual_segmentation_loss(
     *,
@@ -261,20 +279,19 @@ def dual_segmentation_loss(
     pos_weight: float,
     lambda_bce: float = 1.0,
     lambda_dice: float = 1.0,
+    lambda_iou: float = 0.0,  
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """
     Calcula la pérdida total de las dos salidas del modelo.
 
-    La primera salida aprende la máscara manipulada.
-    La segunda salida aprende la máscara auténtica/original.
+    La base estable es BCE con logits + Dice suave.
 
-    La pérdida actual combina:
-    - BCE con logits: ayuda a corregir errores pixel por pixel y permite usar
-    pos_weight cuando hay desbalance.
-    - Dice suave: ayuda a que la forma completa de la máscara se parezca más a la
-    máscara real.
+    IoU loss es opcional:
+    - lambda_iou = 0.0 mantiene BCE + Dice.
+    - lambda_iou > 0.0 añade una restricción geométrica más estricta.
 
-    Esta función es la pérdida principal.
+    Esto permite comparar el criterio optimizado contra una variante más cercana
+    a la presión geométrica del código legacy, sin cambiar el modelo.
     """
     loss_fake_bce = weighted_bce_from_logits(
         pred_fake,
@@ -282,7 +299,9 @@ def dual_segmentation_loss(
         pos_weight=pos_weight,
     )
     loss_fake_dice = soft_dice_loss(pred_fake, target_fake)
-    loss_fake = (lambda_bce * loss_fake_bce) + (lambda_dice * loss_fake_dice)
+    loss_fake_iou = (soft_iou_loss(pred_fake, target_fake)if lambda_iou > 0.0 else pred_fake.new_zeros(()))
+
+    loss_fake = ((lambda_bce * loss_fake_bce) + (lambda_dice * loss_fake_dice)+(lambda_iou * loss_fake_iou))
 
     loss_authentic_bce = weighted_bce_from_logits(
         pred_authentic,
@@ -290,7 +309,9 @@ def dual_segmentation_loss(
         pos_weight=pos_weight,
     )
     loss_authentic_dice = soft_dice_loss(pred_authentic, target_authentic)
-    loss_authentic = (lambda_bce * loss_authentic_bce) + (lambda_dice * loss_authentic_dice)
+    loss_authentic_iou = (soft_iou_loss(pred_authentic, target_authentic)if lambda_iou > 0.0 else pred_authentic.new_zeros(()))
+
+    loss_authentic = ((lambda_bce * loss_authentic_bce)+(lambda_dice * loss_authentic_dice)+(lambda_iou * loss_authentic_iou))
 
     total_loss = loss_fake + loss_authentic
 
@@ -299,7 +320,9 @@ def dual_segmentation_loss(
         "loss_fake": float(loss_fake.detach().cpu()),
         "loss_fake_bce": float(loss_fake_bce.detach().cpu()),
         "loss_fake_dice": float(loss_fake_dice.detach().cpu()),
+        "loss_fake_iou": float(loss_fake_iou.detach().cpu()) if lambda_iou > 0 else 0.0,
         "loss_authentic": float(loss_authentic.detach().cpu()),
         "loss_authentic_bce": float(loss_authentic_bce.detach().cpu()),
         "loss_authentic_dice": float(loss_authentic_dice.detach().cpu()),
+        "loss_authentic_iou": float(loss_authentic_iou.detach().cpu()) if lambda_iou > 0 else 0.0,
     }

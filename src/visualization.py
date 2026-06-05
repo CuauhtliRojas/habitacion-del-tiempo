@@ -66,34 +66,41 @@ def tensor_mask_to_uint8(mask: torch.Tensor, threshold: float = 0.5) -> np.ndarr
 def make_overlay(
     *,
     image_uint8: np.ndarray,
-    mask_uint8: np.ndarray,
-    alpha: float = 0.45,
+    pred_uint8: np.ndarray,
+    gt_uint8: np.ndarray,
+    alpha: float = 0.55,
 ) -> np.ndarray:
     """
-    Crea una superposición visual entre imagen y máscara.
+    Crea una superposición visual de errores entre la predicción y el ground truth.
 
-    La zona detectada se pinta en rojo semitransparente sobre la imagen original.
-    Esto ayuda a revisar rápido si la predicción cae sobre la zona manipulada o
-    si se extendió a regiones incorrectas.
+    verde = verdadero positivo (acierto).
+    amarillo = falso negativo (lo que le faltó pintar).
+    rojo = falso positivo (lo que pintó de más).
     """
     if image_uint8.ndim != 3 or image_uint8.shape[2] != 3:
         raise ValueError("image_uint8 debe tener forma [H, W, 3].")
 
-    if mask_uint8.ndim != 2:
-        raise ValueError("mask_uint8 debe tener forma [H, W].")
-
     overlay = image_uint8.copy().astype(np.float32)
     color = np.zeros_like(overlay)
 
-    """
-    Se usa rojo porque visualmente destaca sobre la mayoría de tonos de piel y
-    fondos. No cambia la predicción; solo es una ayuda para inspección humana.
-    """
-    color[..., 0] = 255.0
+    # Convertimos a booleanos lógicos
+    pred_bool = pred_uint8 > 0
+    gt_bool = gt_uint8 > 0
 
-    mask_bool = mask_uint8 > 0
-    overlay[mask_bool] = (
-        (1.0 - alpha) * overlay[mask_bool] + alpha * color[mask_bool]
+    # Lógica de la matriz de confusión
+    true_positive = pred_bool & gt_bool
+    false_negative = (~pred_bool) & gt_bool
+    false_positive = pred_bool & (~gt_bool)
+
+    # Asignación de colores [R, G, B]
+    color[true_positive] = np.array([0, 255, 0], dtype=np.float32)     # Verde
+    color[false_negative] = np.array([255, 255, 0], dtype=np.float32)  # Amarillo
+    color[false_positive] = np.array([255, 0, 0], dtype=np.float32)    # Rojo
+
+    error_mask = true_positive | false_negative | false_positive
+
+    overlay[error_mask] = (
+        (1.0 - alpha) * overlay[error_mask] + alpha * color[error_mask]
     )
 
     return np.clip(overlay, 0, 255).astype(np.uint8)
@@ -145,7 +152,8 @@ def save_prediction_sample(
     """
     overlay_fake = make_overlay(
         image_uint8=image_uint8,
-        mask_uint8=pred_fake_uint8,
+        pred_uint8=pred_fake_uint8,
+        gt_uint8=gt_fake_uint8,
         alpha=0.45,
     )
 

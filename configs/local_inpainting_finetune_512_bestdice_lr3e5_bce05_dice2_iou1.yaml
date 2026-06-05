@@ -1,0 +1,34 @@
+experiment_name: local_inpainting_finetune_512_bestdice_lr3e5_bce05_dice2_iou1
+dataset_root: Dataset_U-Net_dual_decoder_fs_li
+output_root: outputs/experiments
+
+attacks:
+  - local_inpainting
+
+train_split: train
+test_split: test
+
+image_size: 512
+batch_size: 4
+gradient_accumulation_steps: 2
+epochs: 8
+
+learning_rate: 0.00003
+pos_weight: 33.4754694047
+
+lambda_bce: 0.5
+lambda_dice: 2.0
+lambda_iou: 1.0
+
+max_grad_norm: 1.0
+
+val_ratio: 0.1
+seed: 117
+num_workers: 0
+threshold: 0.5
+
+checkpoint_every: 1
+sample_every: 1
+mixed_precision: true
+
+weights: outputs\experiments\local_inpainting_training_512_pw33_lr3e4_stable_e15_bs4_IoU\checkpoints\best_val_dice.pth
