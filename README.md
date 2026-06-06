@@ -1,4 +1,4 @@
-﻿# 🐉 Habitación del Tiempo (Cámara de Entrenamiento 100G)
+﻿# Habitación del Tiempo (Cámara de Entrenamiento 100G)
 
 Guía operativa para preparar, validar, entrenar, reanudar y evaluar experimentos de segmentación semántica binaria sobre manipulaciones faciales deepfake.
 
@@ -8,6 +8,30 @@ Este repositorio entrena una arquitectura **U-Net Dual-Decoder** para localizar 
 - `local_inpainting`
 
 El objetivo principal es predecir una **máscara fake** que indique la región manipulada. La arquitectura también predice una **máscara auténtica**, pero el análisis principal del proyecto se centra en la localización de la región alterada.
+
+## Alcance del trabajo para examen de titulación
+
+El alcance del proyecto se delimita a la **detección y localización offline de manipulaciones faciales deepfake mediante segmentación semántica binaria**. El sistema no se plantea como una plataforma de detección en tiempo real ni como una herramienta forense certificada para uso legal inmediato. Su objetivo es demostrar, con código reproducible y experimentos controlados, que una arquitectura U-Net Dual-Decoder puede aprender a localizar regiones alteradas en imágenes faciales a partir de máscaras binarias.
+
+Los resultados que se mostrarán en el examen de titulación se concentrarán en:
+
+- la construcción y organización de un dataset propio con dos tipos de manipulación facial: `faceswap` y `local_inpainting`;
+- el entrenamiento de modelos de segmentación para cada ataque y de un modelo mixto con ambos ataques;
+- la evaluación mediante métricas de segmentación, principalmente Dice e IoU sobre la máscara fake;
+- la visualización de resultados mediante máscaras predichas y overlays;
+- la comparación entre entrenamiento por ataque individual y entrenamiento mixto;
+- el análisis de límites observados, tales como sensibilidad a resolución, tamaño de máscara, desbalance de clases y sobrepintado.
+
+El objetivo experimental principal es obtener un modelo capaz de localizar regiones manipuladas de forma visualmente interpretable y cuantificable. Para `faceswap` ya se cuenta con resultados altos en entrenamiento individual. Para `local_inpainting`, el reto principal es que la región manipulada ocupa una fracción mucho menor de la imagen, por lo que se requiere una estrategia de pérdida y ponderación más cuidadosa. El entrenamiento mixto busca aproximarse a un único modelo capaz de trabajar con ambos ataques.
+
+Quedan fuera del alcance inmediato:
+
+- detección en video en tiempo real;
+- despliegue en dispositivos edge o móviles;
+- clasificación fina del tipo de deepfake;
+- explicación causal de la manipulación;
+- evaluación legal o pericial certificada;
+- generalización garantizada a todos los métodos de manipulación facial existentes.
 
 ---
 
@@ -20,8 +44,37 @@ Python 3.12
 uv
 PyTorch con CUDA
 GPU NVIDIA con CUDA disponible
-Dataset local en Dataset_U-Net_dual_decoder_fs_li/
+Dataset local clonado en Dataset_U-Net_dual_decoder_fs_li/
 ```
+
+### Repositorios esperados
+
+El proyecto se organiza en dos repositorios separados:
+
+```text
+camara-de-entrenamiento-100G/
+├── repositorio de entrenamiento
+└── Dataset_U-Net_dual_decoder_fs_li/
+    └── repositorio del dataset
+```
+
+El repositorio de entrenamiento contiene el código fuente, configuraciones YAML, scripts de validación, pruebas documentales y orquestador de entrenamiento. El repositorio del dataset contiene las imágenes originales, máscaras fake, máscaras auténticas y archivos de metadatos.
+
+La carpeta del dataset debe llamarse exactamente:
+
+```text
+Dataset_U-Net_dual_decoder_fs_li
+```
+
+y debe estar ubicada dentro de la raíz del repositorio de entrenamiento. Los YAML y scripts asumen esa ruta por defecto mediante:
+
+```yaml
+dataset_root: Dataset_U-Net_dual_decoder_fs_li
+```
+
+Esto responde directo a "compartir la carpeta del proyecto, código y dataset", pero dejando claro que se comparten como **dos repos funcionales complementarios**.
+
+---
 
 ### Validar GPU
 
@@ -82,7 +135,7 @@ Dataset_U-Net_dual_decoder_fs_li/
         └── metadata.csv
 ```
 
-El dataset no se versiona en Git. Debe permanecer ignorado por `.gitignore`.
+El dataset no se versiona dentro del repositorio de entrenamiento. Debe permanecer ignorado por el `.gitignore` del repo principal y gestionarse como repositorio separado.
 
 Cada muestra completa debe tener:
 
@@ -142,15 +195,29 @@ Contiene:
 - accuracy;
 - BCE con logits;
 - Dice Loss;
+- IoU Loss opcional;
 - pérdida total dual.
 
-La pérdida actual combina:
+La pérdida dual combina:
 
 ```text
-BCE con logits + Dice Loss
+BCEWithLogits + Dice Loss + IoU Loss opcional
 ```
 
-IoU se reporta como métrica, pero no se suma a la pérdida principal.
+El contrato de ponderación BCE separa la salida fake y la salida authentic:
+
+```text
+fake BCE      -> pos_weight o pos_weight_by_attack
+authentic BCE -> authentic_pos_weight, por defecto 1.0
+```
+
+En entrenamientos de un solo ataque puede usarse `pos_weight`. En entrenamientos mixtos se usa `pos_weight_by_attack` para que cada muestra fake reciba el peso correspondiente a su tipo de manipulación. Esto es importante porque faceswap produce máscaras fake grandes, mientras que local_inpainting produce regiones manipuladas pequeñas.
+
+La salida authentic usa `authentic_pos_weight`. Su valor base es 1.0, porque la máscara auténtica es complementaria y no debe heredar automáticamente el desbalance de la región manipulada.
+
+Dice e IoU se calculan por muestra y luego se promedian por batch. Esto evita que una máscara grande domine la pérdida geométrica por acumulación global.
+
+---
 
 ### `src/checkpoints.py`
 
@@ -209,7 +276,7 @@ Usar nombres descriptivos. El nombre debe decir:
 ataque
 tipo de experimento
 resolución
-pos_weight
+pos_weight o pos_weight_by_attack
 learning rate
 estabilidad/configuración
 épocas
@@ -278,8 +345,10 @@ batch_size: 2
 epochs: 15
 learning_rate: 0.0003
 pos_weight: 2.1
+authentic_pos_weight: 1.0
 lambda_bce: 1.0
 lambda_dice: 2.0
+lambda_iou: 0.0
 gradient_accumulation_steps: 4
 max_grad_norm: 1.0
 val_ratio: 0.1
@@ -351,9 +420,9 @@ batch_size 4 * accumulation 2 = batch efectivo 8
 batch_size 16 * accumulation 1 = batch efectivo 16
 ```
 
-### `pos_weight`
+### `pos_weight`, `pos_weight_by_attack` y `authentic_pos_weight`
 
-Peso para píxeles positivos en BCE. No debe elegirse al azar. Debe estimarse según el porcentaje real de área blanca en las máscaras.
+`pos_weight` es el peso para píxeles positivos en BCE dentro de la salida fake. No debe elegirse al azar. Debe estimarse según el porcentaje real de área blanca en las máscaras fake.
 
 Valores usados hasta ahora:
 
@@ -363,7 +432,28 @@ local_inpainting: 33.4754694047
 fine-tuning local_inpainting: 15.0
 ```
 
-### `lambda_bce` y `lambda_dice`
+En entrenamientos de un solo ataque puede usarse:
+
+```yaml
+pos_weight: 2.1
+authentic_pos_weight: 1.0
+```
+
+En entrenamientos mixtos se declara el peso BCE fake por ataque:
+
+```yaml
+pos_weight_by_attack:
+  faceswap: 2.1
+  local_inpainting: 33.4754694047
+
+authentic_pos_weight: 1.0
+```
+
+`authentic_pos_weight` pertenece a la salida authentic. Su valor base es 1.0, salvo que exista una medición específica que justifique otro valor.
+
+---
+
+### `lambda_bce`, `lambda_dice` y `lambda_iou`
 
 Pesos de la pérdida compuesta.
 
@@ -372,7 +462,18 @@ Configuración estable usada:
 ```yaml
 lambda_bce: 1.0
 lambda_dice: 2.0
+lambda_iou: 0.0
 ```
+
+Para experimentos con presión geométrica explícita puede usarse:
+
+```yaml
+lambda_iou: 1.0
+```
+
+`lambda_iou` permite sumar IoU Loss a la pérdida total. Esto se usa en experimentos donde se busca una presión geométrica más estricta sobre la región segmentada.
+
+---
 
 ### `mixed_precision`
 
@@ -825,6 +926,34 @@ Resultado observado:
 - pico reportado en época 3;
 - val_dice_fake aproximado: 0.777.
 
+### Entrenamiento mixto FaceSwap + Local Inpainting
+
+```text
+configs/mixed_faceswap_local_inpainting_512_attack_weighted_fake_bce_auth1_dice_iou.yaml
+```
+
+Uso:
+
+- Entrenamiento con ambos ataques en un solo modelo.
+- batch_size: 4.
+- gradient_accumulation_steps: 2.
+- learning_rate: 0.00005.
+- lambda_bce: 1.0.
+- lambda_dice: 2.0.
+- lambda_iou: 1.0.
+
+Contrato de pérdida:
+
+```yaml
+pos_weight_by_attack:
+  faceswap: 2.1
+  local_inpainting: 33.4754694047
+
+authentic_pos_weight: 1.0
+```
+
+Este experimento busca entrenar un modelo único capaz de localizar manipulaciones faceswap y local_inpainting. La métrica debe revisarse por ataque, no solo como promedio global, porque ambas manipulaciones tienen tamaños de máscara muy distintos.
+
 ## 20. Limpieza de archivos temporales
 
 No versionar archivos temporales de trabajo como:
@@ -871,8 +1000,88 @@ Antes de dejar un entrenamiento largo corriendo:
 3. confirmar ataque correcto;
 4. confirmar image_size;
 5. confirmar batch_size y accumulation;
-6. confirmar pos_weight;
+6. confirmar `pos_weight` o `pos_weight_by_attack`, además de `authentic_pos_weight`;
 7. revisar que mixed_precision esté en true;
 8. revisar que checkpoint_every sea 1;
 9. vigilar los primeros minutos;
 10. detener si hay OOM, NaN, Inf o skipped subiendo constantemente.
+
+## 23. Entrega del proyecto y dataset
+
+El proyecto se comparte como dos repositorios complementarios:
+
+```text
+camara-de-entrenamiento-100G
+Dataset_U-Net_dual_decoder_fs_li
+```
+
+El repositorio camara-de-entrenamiento-100G contiene:
+
+- código fuente del modelo;
+- orquestador de entrenamiento;
+- configuraciones YAML;
+- scripts de análisis, validación y evaluación;
+- pruebas documentales en Pruebas/;
+- documentación operativa del entrenamiento.
+
+El repositorio Dataset_U-Net_dual_decoder_fs_li contiene:
+
+- imágenes originales;
+- máscaras fake;
+- máscaras auténticas;
+- metadatos por split y ataque.
+
+Para ejecutar el proyecto, ambos repositorios deben quedar en la misma carpeta raíz:
+
+```text
+camara-de-entrenamiento-100G/
+└── Dataset_U-Net_dual_decoder_fs_li/
+```
+
+La separación del dataset en un repositorio propio permite mantener limpio el código de entrenamiento y facilita compartir, auditar o actualizar el dataset sin modificar el repositorio principal.
+
+---
+
+## Sobre el repo del dataset
+
+Lo entendí así:
+
+Quieres crear un repo independiente llamado exactamente:
+
+```text
+Dataset_U-Net_dual_decoder_fs_li
+```
+
+Ese repo debe ser funcional en el sentido de que, al clonarlo dentro del repo de entrenamiento, los scripts actuales encuentren todo sin cambiar rutas.
+
+Estructura mínima del repo dataset:
+
+```text
+Dataset_U-Net_dual_decoder_fs_li/
+├── README.md
+├── dataset_manifest.json
+├── faceswap/
+│   ├── train/
+│   │   ├── imagen_original/
+│   │   ├── mascara_autentica/
+│   │   ├── mascara_fake/
+│   │   └── metadata.csv
+│   └── test/
+│       ├── imagen_original/
+│       ├── mascara_autentica/
+│       ├── mascara_fake/
+│       └── metadata.csv
+└── local_inpainting/
+    ├── train/
+    │   ├── imagen_original/
+    │   ├── mascara_autentica/
+    │   ├── mascara_fake/
+    │   └── metadata.csv
+    └── test/
+        ├── imagen_original/
+        ├── mascara_autentica/
+        ├── mascara_fake/
+        └── metadata.csv
+```
+
+Como son ~50,931 muestras completas y ~152,793 PNG, el repo puede pesar muchísimo. Para que sea "funcional" de verdad, lo recomendable es que sea un repo Git con Git LFS para los `.png`. Si se sube como Git normal, GitHub puede volverse inmanejable por tamaño, commits lentos y límites de archivos grandes. El README del dataset debe explicar cómo clonarlo, validar conteos y confirmar que se colocó dentro del repo de entrenamiento.
