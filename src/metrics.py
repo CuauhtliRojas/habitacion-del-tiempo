@@ -201,7 +201,7 @@ def segmentation_metric_row(
 def weighted_bce_from_logits(
     logits: torch.Tensor,
     target: torch.Tensor,
-    pos_weight: float = 1.0,
+    pos_weight: float | torch.Tensor = 1.0,
 ) -> torch.Tensor:
     """
     Calcula BCE estable usando logits.
@@ -211,19 +211,23 @@ def weighted_bce_from_logits(
     que PyTorch haga el cálculo estable con binary_cross_entropy_with_logits.
 
     `pos_weight` sirve para darle más peso a los píxeles positivos cuando la
-    máscara fake ocupa poca área. Por eso conviene calcularlo con la proporción 
-    real de píxeles negativos/positivos del dataset.
+    máscara fake ocupa poca área. Puede ser un número único para todo el batch
+    o un tensor por muestra cuando se mezclan ataques con distribuciones
+    distintas de píxeles positivos.
 
     Referencia:
     https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.binary_cross_entropy_with_logits.html
     """
     logits = logits.float()
     target = target.float()
-    pos_weight_tensor = torch.as_tensor(
-        pos_weight,
-        dtype=logits.dtype,
-        device=logits.device,
-    )
+    if isinstance(pos_weight, torch.Tensor):
+        pos_weight_tensor = pos_weight.to(dtype=logits.dtype, device=logits.device)
+    else:
+        pos_weight_tensor = torch.as_tensor(
+            pos_weight,
+            dtype=logits.dtype,
+            device=logits.device,
+        )
 
     return F.binary_cross_entropy_with_logits(
         logits,
@@ -276,7 +280,8 @@ def dual_segmentation_loss(
     target_fake: torch.Tensor,
     pred_authentic: torch.Tensor,
     target_authentic: torch.Tensor,
-    pos_weight: float,
+    pos_weight_fake: float | torch.Tensor,
+    pos_weight_authentic: float | torch.Tensor = 1.0,
     lambda_bce: float = 1.0,
     lambda_dice: float = 1.0,
     lambda_iou: float = 0.0,  
@@ -290,13 +295,18 @@ def dual_segmentation_loss(
     - lambda_iou = 0.0 mantiene BCE + Dice.
     - lambda_iou > 0.0 añade una restricción geométrica más estricta.
 
+    En experimentos mixtos, pos_weight puede llegar como tensor por muestra.
+    Esto permite que faceswap y local_inpainting reciban una ponderación acorde
+    a su propia proporción de píxeles positivos sin cambiar la arquitectura del
+    modelo.
+
     Esto permite comparar el criterio optimizado contra una variante más cercana
     a la presión geométrica del código legacy, sin cambiar el modelo.
     """
     loss_fake_bce = weighted_bce_from_logits(
         pred_fake,
         target_fake,
-        pos_weight=pos_weight,
+        pos_weight=pos_weight_fake,
     )
     loss_fake_dice = soft_dice_loss(pred_fake, target_fake)
     loss_fake_iou = (soft_iou_loss(pred_fake, target_fake)if lambda_iou > 0.0 else pred_fake.new_zeros(()))
@@ -306,7 +316,7 @@ def dual_segmentation_loss(
     loss_authentic_bce = weighted_bce_from_logits(
         pred_authentic,
         target_authentic,
-        pos_weight=pos_weight,
+        pos_weight=pos_weight_authentic,
     )
     loss_authentic_dice = soft_dice_loss(pred_authentic, target_authentic)
     loss_authentic_iou = (soft_iou_loss(pred_authentic, target_authentic)if lambda_iou > 0.0 else pred_authentic.new_zeros(()))

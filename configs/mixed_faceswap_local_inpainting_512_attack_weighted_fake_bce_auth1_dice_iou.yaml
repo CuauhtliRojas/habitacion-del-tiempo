@@ -1,0 +1,38 @@
+﻿experiment_name: mixed_faceswap_local_inpainting_512_attack_weighted_fake_bce_auth1_dice_iou
+dataset_root: Dataset_U-Net_dual_decoder_fs_li
+output_root: outputs/experiments
+
+attacks:
+  - faceswap
+  - local_inpainting
+
+train_split: train
+test_split: test
+
+image_size: 512
+batch_size: 4
+gradient_accumulation_steps: 2
+epochs: 15
+
+learning_rate: 0.00005
+
+pos_weight_by_attack:
+  faceswap: 2.1
+  local_inpainting: 33.4754694047
+
+authentic_pos_weight: 1.0
+
+lambda_bce: 1.0
+lambda_dice: 2.0
+lambda_iou: 1.0
+
+max_grad_norm: 1.0
+
+val_ratio: 0.1
+seed: 117
+num_workers: 0
+threshold: 0.5
+
+checkpoint_every: 1
+sample_every: 1
+mixed_precision: true

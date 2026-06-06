@@ -214,6 +214,13 @@ def print_preflight(config: dict[str, Any], gpu_info: dict[str, Any], train_coun
     print(f"CUDA disponible: {gpu_info['cuda_available']}")
     print(f"GPU: {gpu_info['gpu_name']}")
     print(f"VRAM total GB: {gpu_info['total_vram_gb']}")
+    pos_weight_by_attack = config.get("pos_weight_by_attack")
+    if isinstance(pos_weight_by_attack, dict):
+        print("Pos weight por ataque:")
+        for attack, value in sorted(pos_weight_by_attack.items()):
+            print(f"  - {attack}: {value}")
+    else:
+        print(f"Pos weight: {config.get('pos_weight')}")
 
     """
     Las advertencias no detienen el entrenamiento.
@@ -333,6 +340,45 @@ def average_dicts(rows: list[dict[str, float]]) -> dict[str, float]:
     }
 
 
+def resolve_pos_weight_for_batch(
+    *,
+    config: dict[str, Any],
+    attacks: list[str] | tuple[str, ...],
+    device: torch.device,
+) -> float | torch.Tensor:
+    """
+    Resuelve el pos_weight que se usará en BCE para un batch.
+
+    Si el YAML tiene pos_weight_by_attack, se construye un tensor con un peso por
+    muestra. Esto permite mezclar ataques con distribuciones muy distintas:
+    faceswap usa máscara fake grande y local_inpainting usa región fake pequeña.
+
+    Si el YAML solo tiene pos_weight, se conserva el comportamiento anterior.
+    """
+    pos_weight_by_attack = config.get("pos_weight_by_attack")
+
+    if pos_weight_by_attack is None:
+        return float(config["pos_weight"])
+
+    if not isinstance(pos_weight_by_attack, dict):
+        raise ValueError("pos_weight_by_attack debe ser un diccionario ataque -> peso.")
+
+    values: list[float] = []
+    missing: list[str] = []
+
+    for attack in attacks:
+        attack_name = str(attack)
+        if attack_name not in pos_weight_by_attack:
+            missing.append(attack_name)
+            continue
+        values.append(float(pos_weight_by_attack[attack_name]))
+
+    if missing:
+        raise KeyError(f"Falta pos_weight_by_attack para: {sorted(set(missing))}")
+
+    return torch.tensor(values, dtype=torch.float32, device=device).view(-1, 1, 1, 1)
+
+
 def run_epoch(
     *,
     model: torch.nn.Module,
@@ -385,6 +431,7 @@ def run_epoch(
     Con 0.0 se usa BCE + Dice. 
     """
     lambda_iou = float(config.get("lambda_iou", 0.0))
+    authentic_pos_weight = float(config.get("authentic_pos_weight", 1.0))
 
     """
     mixed_precision activa autocast solo cuando hay CUDA.
@@ -456,13 +503,19 @@ def run_epoch(
                 BCE con logits y convierte a float cuando hace falta.
                 """
                 pred_fake, pred_authentic = model(images)
+                pos_weight = resolve_pos_weight_for_batch(
+                    config=config,
+                    attacks=attacks,
+                    device=fake_masks.device,
+                )
 
                 loss, loss_parts = dual_segmentation_loss(
                     pred_fake=pred_fake,
                     target_fake=fake_masks,
                     pred_authentic=pred_authentic,
                     target_authentic=authentic_masks,
-                    pos_weight=float(config["pos_weight"]),
+                    pos_weight_fake=pos_weight,
+                    pos_weight_authentic=authentic_pos_weight,
                     lambda_bce=lambda_bce,
                     lambda_dice=lambda_dice,
                     lambda_iou=lambda_iou,
@@ -626,7 +679,6 @@ def main() -> None:
         "batch_size",
         "epochs",
         "learning_rate",
-        "pos_weight",
         "val_ratio",
         "seed",
         "num_workers",
@@ -638,6 +690,9 @@ def main() -> None:
     for key in required_keys:
         if key not in config:
             raise KeyError(f"Falta la clave requerida en config: {key}")
+
+    if "pos_weight" not in config and "pos_weight_by_attack" not in config:
+        raise KeyError("Falta pos_weight o pos_weight_by_attack en config.")
 
     torch.manual_seed(int(config["seed"]))
 
@@ -706,7 +761,7 @@ def main() -> None:
     optimizer = torch.optim.Adam(model.parameters(), lr=float(config["learning_rate"]))
 
     scaler = torch.amp.GradScaler(
-        "Usa cuda",
+        "cuda",
         enabled=bool(config.get("mixed_precision", False)) and device.type == "cuda"
     )
 
@@ -914,3 +969,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
